@@ -37,7 +37,6 @@ See `example.lua` for a full demo covering every element.
 * Checkboxes with a popping check animation, saved through configuration flags
 * Copy buttons that put text on the clipboard and morph the icon into a checkmark
 * Flip buttons that roll over to a light back face on hover
-* A slim scroll rail on the right edge of every page that fills with your scroll position
 * Header badge pill, for things like a language or region tag
 * Key system with saved keys and keys fetched from a site
 
@@ -198,12 +197,6 @@ Tab:CreateFlipButton({
 	Callback = function() end,
 })
 ```
-
-### Scroll rail (new in Gen 3)
-
-Not an element, just built in: every page that can scroll gets a slim accent rail on
-its right edge that fills top to bottom with your scroll position. Pages that fit
-without scrolling hide it automatically.
 
 ### FAQ (new in Gen 3)
 

@@ -1650,28 +1650,6 @@ function RayfieldLibrary:CreateWindow(Settings)
 		})
 		padAll(page, 2,5, 16, 1)
 
-		local railTrack = create("Frame", {
-			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, -1, 0, 4),
-			Size = UDim2.new(0, 3, 1, -8),
-			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-			BackgroundTransparency = 1,
-			Parent = pageWrapper,
-		})
-		roundFull(railTrack)
-		local railFill = create("Frame", {
-			Size = UDim2.new(1, 0, 0, 0),
-			BackgroundTransparency = 1,
-			Parent = railTrack,
-		})
-		paint(railFill, "BackgroundColor3", "Accent")
-		roundFull(railFill)
-		create("UISizeConstraint", {
-			MinSize = Vector2.new(0, 6),
-			Parent = railFill,
-		})
-		local railShown = false
-
 		local EDGE = 0.05
 		local function updateFade()
 			local vh = page.AbsoluteWindowSize.Y
@@ -1689,15 +1667,6 @@ function RayfieldLibrary:CreateWindow(Settings)
 					NumberSequenceKeypoint.new(1 - EDGE,0),
 					NumberSequenceKeypoint.new(1, botT),
 				})
-			end
-			local scrollable = maxScroll > 4
-			if scrollable then
-				railFill.Size = UDim2.new(1, 0, math.clamp(pos / maxScroll, 0, 1), 0)
-			end
-			if scrollable ~= railShown then
-				railShown = scrollable
-				tween(railTrack, TI_MED, {BackgroundTransparency = scrollable and 0.92 or 1})
-				tween(railFill, TI_MED, {BackgroundTransparency = scrollable and 0.12 or 1})
 			end
 		end
 		page:GetPropertyChangedSignal("CanvasPosition"):Connect(updateFade)
@@ -3490,6 +3459,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 			})
 			well.Parent = card
 
+			local wellScale = create("UIScale", {Parent = well})
+
 			local copyIcon = makeIcon(well, "copy", 16, Color3.fromRGB(26, 26, 26), 0)
 			copyIcon.AnchorPoint = Vector2.new(0.5, 0.5)
 			copyIcon.Position = UDim2.fromScale(0.5, 0.5)
@@ -3529,14 +3500,18 @@ function RayfieldLibrary:CreateWindow(Settings)
 				if copied then return end
 				local ok = copyToClipboard(CopyValue.CurrentValue)
 				if not ok then
-					RayfieldLibrary:Notify({Title = "Copy failed", Content = "Your executor does not expose a clipboard function.", Duration = 4, Image = "clipboard-x"})
+					warn("Rayfield Gen3 | Copy failed, no clipboard function available")
 					return
 				end
 				copied = true
+				tween(wellScale, TweenInfo.new(0.07, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 0.85})
+				task.delay(0.09, function()
+					tween(wellScale, TI_SMOOTH, {Scale = 1})
+				end)
 				tween(copyIcon, TI_FAST, {ImageTransparency = 1, Size = UDim2.fromOffset(10, 10)})
 				tween(checkIcon, TI_SMOOTH, {ImageTransparency = 0, Size = UDim2.fromOffset(16, 16)})
 				runCallback(CopySettings.Callback, CopyValue.CurrentValue)
-				task.delay(1.4, function()
+				task.delay(2, function()
 					if not well.Parent then return end
 					copied = false
 					tween(checkIcon, TI_FAST, {ImageTransparency = 1, Size = UDim2.fromOffset(10, 10)})

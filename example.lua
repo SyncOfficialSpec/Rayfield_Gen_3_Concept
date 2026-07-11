@@ -70,12 +70,7 @@ Home:CreateCopyButton({
 	Description = "Copies the invite link to your clipboard.",
 	Text = "https://discord.gg/hXtTC9SVfX",
 	Callback = function(text)
-		Rayfield:Notify({
-			Title = "Copied",
-			Content = text,
-			Duration = 3,
-			Image = "clipboard-check",
-		})
+		print("Copied:", text)
 	end,
 })
 
@@ -83,12 +78,7 @@ Home:CreateFlipButton({
 	Front = "Front Button",
 	Back = "Back Button",
 	Callback = function()
-		Rayfield:Notify({
-			Title = "Flip button",
-			Content = "You clicked the back face.",
-			Duration = 3,
-			Image = "rotate-3d",
-		})
+		print("Flip button clicked")
 	end,
 })
 
