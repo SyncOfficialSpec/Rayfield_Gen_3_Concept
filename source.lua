@@ -1804,6 +1804,52 @@ function RayfieldLibrary:CreateWindow(Settings)
 		end)
 	end
 
+	local tipLabel = nil
+	local tipOwner = nil
+	local function ensureTip()
+		if tipLabel and tipLabel.Parent then return tipLabel end
+		tipLabel = create("TextLabel", {
+			Name = "Tooltip",
+			AutomaticSize = Enum.AutomaticSize.XY,
+			AnchorPoint = Vector2.new(0.5, 1),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			TextColor3 = Color3.fromRGB(24, 24, 24),
+			Font = FONT_MEDIUM,
+			TextSize = 13,
+			TextWrapped = true,
+			Visible = false,
+			ZIndex = 100000,
+			Parent = ensureRoot(),
+		})
+		round(tipLabel, 6)
+		padAll(tipLabel, 5, 9, 5, 9)
+		create("UISizeConstraint", {MaxSize = Vector2.new(230, math.huge), Parent = tipLabel})
+		return tipLabel
+	end
+
+	local function tipFor(card, text)
+		if not text or text == "" then return end
+		card.MouseEnter:Connect(function()
+			tipOwner = card
+			task.delay(0.15, function()
+				if tipOwner ~= card or not card.Parent then return end
+				local tip = ensureTip()
+				tip.Text = text
+				local cx = card.AbsolutePosition.X + card.AbsoluteSize.X / 2
+				local cy = card.AbsolutePosition.Y - 6
+				tip.Position = UDim2.fromOffset(cx, cy + 5)
+				tip.Visible = true
+				tip.TextTransparency = 1
+				tip.BackgroundTransparency = 1
+				tween(tip, TI_FAST, {TextTransparency = 0, BackgroundTransparency = 0, Position = UDim2.fromOffset(cx, cy)})
+			end)
+		end)
+		card.MouseLeave:Connect(function()
+			if tipOwner == card then tipOwner = nil end
+			if tipLabel then tipLabel.Visible = false end
+		end)
+	end
+
 	local function buildTabAPI(page, compact)
 		local Tab = {}
 		Tab.Page=page
@@ -3243,6 +3289,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			else
 				card, label = makeCard(page,ButtonSettings.Name,ButtonSettings.Icon, 50)
 				descFor(card, ButtonSettings.Description)
+				tipFor(card, ButtonSettings.Tooltip)
 			end
 			hoverable(card)
 			local clicker = create("TextButton", {
@@ -3270,6 +3317,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			ToggleSettings = ToggleSettings or {}
 			local card = makeCard(page,ToggleSettings.Name, ToggleSettings.Icon, 50)
 			descFor(card, ToggleSettings.Description)
+			tipFor(card, ToggleSettings.Tooltip)
 			hoverable(card)
 
 			local track = create("Frame", {
@@ -3353,6 +3401,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			paint(card, "BackgroundColor3", "Card")
 			cardBase(card)
 			descFor(card, CheckboxSettings.Description)
+			tipFor(card, CheckboxSettings.Tooltip)
 			hoverable(card)
 
 			local box = create("Frame", {
@@ -3443,6 +3492,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			CopySettings = CopySettings or {}
 			local card, label = makeCard(page, CopySettings.Name, CopySettings.Icon, 50)
 			descFor(card, CopySettings.Description)
+			tipFor(card, CopySettings.Tooltip)
 			hoverable(card)
 
 			local well = create("Frame", {
@@ -3544,6 +3594,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			paint(card, "BackgroundColor3", "Card")
 			cardBase(card)
 			descFor(card, FlipSettings.Description)
+			tipFor(card, FlipSettings.Tooltip)
 
 			local function makeFace(text, dark)
 				local layer = create("Frame", {
@@ -3609,6 +3660,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			ButtonSettings = ButtonSettings or {}
 			local card, label = makeCard(page, ButtonSettings.Name, ButtonSettings.Icon, 50)
 			descFor(card, ButtonSettings.Description)
+			tipFor(card, ButtonSettings.Tooltip)
 			hoverable(card)
 
 			local rippleClip = create("CanvasGroup", {
@@ -3668,6 +3720,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local maxValue = ProgressSettings.MaxValue or 100
 			local card, label, textX = makeCard(page, ProgressSettings.Name, ProgressSettings.Icon, 50)
 			descFor(card, ProgressSettings.Description)
+			tipFor(card, ProgressSettings.Tooltip)
 			hoverable(card)
 			label.Size = UDim2.new(0.42, -textX, 0, 18)
 
@@ -3790,6 +3843,236 @@ function RayfieldLibrary:CreateWindow(Settings)
 			return Hint
 		end
 
+		function Tab:CreatePinnedList(ListSettings)
+			ListSettings = ListSettings or {}
+			local holder = create("Frame", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 8),
+				Parent = holder,
+			})
+			local header = create("TextLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 20),
+				Font = FONT_MEDIUM,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Text = ListSettings.Title or "All Items",
+				LayoutOrder = 5000,
+				Parent = holder,
+			})
+			paint(header, "TextColor3", "TextSub")
+			create("UIPadding", {PaddingLeft = UDim.new(0, 4), Parent = header})
+
+			local List = {}
+			local itemsByName = {}
+			local pinSerial = 0
+
+			local function makeItem(cfg, index)
+				local card = create("Frame", {
+					Size = UDim2.new(1, 0, 0, 54),
+					LayoutOrder = 10000 + index,
+					Parent = holder,
+				})
+				card:SetAttribute("SearchName", cfg.Name or "")
+				paint(card, "BackgroundColor3", "Card")
+				cardBase(card)
+				hoverable(card)
+
+				local textX = 16
+				if cfg.Icon then
+					local well = create("Frame", {
+						AnchorPoint = Vector2.new(0, 0.5),
+						Position = UDim2.new(0, 12, 0.5, 0),
+						Size = UDim2.fromOffset(32, 32),
+						BackgroundColor3 = Theme.CardInset,
+						Parent = card,
+					})
+					round(well, 9)
+					local ic = makeIcon(well, cfg.Icon, 16, Theme.TextTitle, 0.04)
+					if ic then
+						ic.AnchorPoint = Vector2.new(0.5, 0.5)
+						ic.Position = UDim2.fromScale(0.5, 0.5)
+					end
+					textX = 54
+				end
+
+				local title = create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(textX, 10),
+					Size = UDim2.new(1, -textX - 56, 0, 17),
+					Font = FONT_MEDIUM,
+					TextSize = 15,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					Text = cfg.Name or "",
+					Parent = card,
+				})
+				paint(title, "TextColor3", "TextBody")
+				local sub = create("TextLabel", {
+					BackgroundTransparency = 1,
+					Position = UDim2.fromOffset(textX, 28),
+					Size = UDim2.new(1, -textX - 56, 0, 15),
+					Font = FONT_REGULAR,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					Text = cfg.Description or "",
+					Parent = card,
+				})
+				paint(sub, "TextColor3", "TextSub")
+
+				local pinBtn = create("TextButton", {
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -12, 0.5, 0),
+					Size = UDim2.fromOffset(30, 30),
+					BackgroundColor3 = Theme.CardSelected,
+					BackgroundTransparency = 1,
+					Text = "",
+					Parent = card,
+				})
+				roundFull(pinBtn)
+				local pinIcon = makeIcon(pinBtn, "pin", 14, Theme.TextTitle, 1)
+				if pinIcon then
+					pinIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+					pinIcon.Position = UDim2.fromScale(0.5, 0.5)
+				end
+
+				local item = {Name = cfg.Name or ("Item " .. index), Pinned = false, Order = index}
+				local function refreshPin()
+					local show = item.Pinned
+					tween(pinBtn, TI_FAST, {BackgroundTransparency = show and 0.25 or 1})
+					if pinIcon then
+						tween(pinIcon, TI_FAST, {ImageTransparency = show and 0.1 or 1})
+					end
+				end
+				local function setPinned(state, silent)
+					if item.Pinned == state then return end
+					item.Pinned = state
+					if state then
+						pinSerial = pinSerial + 1
+						card.LayoutOrder = pinSerial
+					else
+						card.LayoutOrder = 10000 + item.Order
+					end
+					refreshPin()
+					tween(card, TweenInfo.new(0.07, Enum.EasingStyle.Quad), {BackgroundColor3 = Theme.CardSelected})
+					task.delay(0.12, function()
+						tween(card, TI_MED, {BackgroundColor3 = Theme.Card})
+					end)
+					if not silent then
+						runCallback(ListSettings.Callback, item.Name, state)
+					end
+				end
+				item.SetPinned = setPinned
+
+				pinBtn.MouseButton1Click:Connect(function()
+					setPinned(not item.Pinned)
+				end)
+				card.MouseEnter:Connect(function()
+					tween(pinBtn, TI_FAST, {BackgroundTransparency = 0.25})
+					if pinIcon then
+						tween(pinIcon, TI_FAST, {ImageTransparency = 0.1})
+					end
+				end)
+				card.MouseLeave:Connect(refreshPin)
+
+				itemsByName[item.Name] = item
+				if cfg.Pinned then
+					setPinned(true, true)
+				end
+			end
+
+			for i, cfg in ipairs(ListSettings.Items or {}) do
+				makeItem(cfg, i)
+			end
+
+			function List:Pin(name, state)
+				local item = itemsByName[name]
+				if item then
+					item.SetPinned(state ~= false)
+				end
+			end
+			function List:GetPinned()
+				local out = {}
+				for name, item in pairs(itemsByName) do
+					if item.Pinned then
+						table.insert(out, name)
+					end
+				end
+				table.sort(out)
+				return out
+			end
+			return List
+		end
+
+		function Tab:CreateCursorTag(TagSettings)
+			TagSettings = TagSettings or {}
+			local card = create("Frame", {
+				Size = UDim2.new(1, 0, 0, TagSettings.Height or 110),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", TagSettings.Text or "")
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+
+			local hint = create("TextLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				Font = FONT_REGULAR,
+				TextSize = 14,
+				TextTransparency = 0.35,
+				Text = TagSettings.Hint or "Move your mouse over this area",
+				Parent = card,
+			})
+			paint(hint, "TextColor3", "TextSub")
+
+			local chip = create("TextLabel", {
+				AutomaticSize = Enum.AutomaticSize.XY,
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				TextColor3 = Color3.fromRGB(24, 24, 24),
+				Font = FONT_MEDIUM,
+				TextSize = 12,
+				Text = TagSettings.Text or "Tag",
+				Visible = false,
+				ZIndex = 6,
+				Parent = card,
+			})
+			round(chip, 6)
+			padAll(chip, 4, 8, 4, 8)
+
+			card.InputChanged:Connect(function(input)
+				if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+				chip.Position = UDim2.fromOffset(
+					input.Position.X - card.AbsolutePosition.X + 14,
+					input.Position.Y - card.AbsolutePosition.Y + 18
+				)
+			end)
+			card.MouseEnter:Connect(function()
+				chip.Visible = true
+				chip.TextTransparency = 1
+				chip.BackgroundTransparency = 1
+				tween(chip, TI_FAST, {TextTransparency = 0, BackgroundTransparency = 0})
+			end)
+			card.MouseLeave:Connect(function()
+				chip.Visible = false
+			end)
+
+			local Tag = {}
+			function Tag:Set(newText)
+				chip.Text = newText or chip.Text
+			end
+			return Tag
+		end
+
 		function Tab:CreateSlider(SliderSettings)
 			SliderSettings = SliderSettings or {}
 			local range = SliderSettings.Range or {0, 100}
@@ -3805,6 +4088,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			paint(card, "BackgroundColor3", "Card")
 			cardBase(card)
 			descFor(card,SliderSettings.Description)
+			tipFor(card, SliderSettings.Tooltip)
 
 			local textX = 17
 			if SliderSettings.Icon then
@@ -3972,6 +4256,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			InputSettings = InputSettings or {}
 			local card = makeCard(page,InputSettings.Name,InputSettings.Icon, 50)
 			descFor(card, InputSettings.Description)
+			tipFor(card, InputSettings.Tooltip)
 			hoverable(card)
 
 			local boxHolder = create("Frame", {
@@ -4369,6 +4654,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			KeybindSettings = KeybindSettings or {}
 			local card = makeCard(page, KeybindSettings.Name, KeybindSettings.Icon, 50)
 			descFor(card, KeybindSettings.Description)
+			tipFor(card, KeybindSettings.Tooltip)
 			hoverable(card)
 
 			local keyHolder = create("Frame", {
