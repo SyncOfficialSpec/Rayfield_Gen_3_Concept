@@ -3245,45 +3245,12 @@ function RayfieldLibrary:CreateWindow(Settings)
 				descFor(card, ButtonSettings.Description)
 			end
 			hoverable(card)
-			local rippleClip = create("CanvasGroup", {
-				BackgroundTransparency = 1,
-				Size = UDim2.fromScale(1, 1),
-				ZIndex = 4,
-				Parent = card,
-			})
-			round(rippleClip, 14)
 			local clicker = create("TextButton", {
 				BackgroundTransparency = 1,
 				Text = "",
 				Size = UDim2.fromScale(1, 1),
-				ZIndex = 5,
 				Parent = card,
 			})
-			clicker.InputBegan:Connect(function(input)
-				if input.UserInputType ~= Enum.UserInputType.MouseButton1
-					and input.UserInputType ~= Enum.UserInputType.Touch then
-					return
-				end
-				local rx = math.clamp(input.Position.X - card.AbsolutePosition.X, 0, card.AbsoluteSize.X)
-				local ry = math.clamp(input.Position.Y - card.AbsolutePosition.Y, 0, card.AbsoluteSize.Y)
-				local circle = create("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0.5),
-					Position = UDim2.fromOffset(rx, ry),
-					Size = UDim2.fromOffset(0, 0),
-					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-					BackgroundTransparency = 0.88,
-					Parent = rippleClip,
-				})
-				roundFull(circle)
-				local span = math.max(card.AbsoluteSize.X, card.AbsoluteSize.Y) * 2.2
-				tween(circle, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-					Size = UDim2.fromOffset(span, span),
-					BackgroundTransparency = 1,
-				})
-				task.delay(0.6, function()
-					circle:Destroy()
-				end)
-			end)
 			clicker.MouseButton1Click:Connect(function()
 				tween(card, TweenInfo.new(0.07,Enum.EasingStyle.Quad), {BackgroundColor3 = Theme.CardSelected})
 				task.delay(0.09,function()
@@ -3636,6 +3603,64 @@ function RayfieldLibrary:CreateWindow(Settings)
 				card:SetAttribute("SearchName", frontLabel.Text .. " " .. backLabel.Text)
 			end
 			return FlipValue
+		end
+
+		function Tab:CreateRippleButton(ButtonSettings)
+			ButtonSettings = ButtonSettings or {}
+			local card, label = makeCard(page, ButtonSettings.Name, ButtonSettings.Icon, 50)
+			descFor(card, ButtonSettings.Description)
+			hoverable(card)
+
+			local rippleClip = create("CanvasGroup", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 4,
+				Parent = card,
+			})
+			round(rippleClip, 14)
+
+			local clicker = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 5,
+				Parent = card,
+			})
+			clicker.InputBegan:Connect(function(input)
+				if input.UserInputType ~= Enum.UserInputType.MouseButton1
+					and input.UserInputType ~= Enum.UserInputType.Touch then
+					return
+				end
+				local rx = math.clamp(input.Position.X - card.AbsolutePosition.X, 0, card.AbsoluteSize.X)
+				local ry = math.clamp(input.Position.Y - card.AbsolutePosition.Y, 0, card.AbsoluteSize.Y)
+				local circle = create("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromOffset(rx, ry),
+					Size = UDim2.fromOffset(0, 0),
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+					BackgroundTransparency = 0.88,
+					Parent = rippleClip,
+				})
+				roundFull(circle)
+				local span = math.max(card.AbsoluteSize.X, card.AbsoluteSize.Y) * 2.2
+				tween(circle, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					Size = UDim2.fromOffset(span, span),
+					BackgroundTransparency = 1,
+				})
+				task.delay(0.6, function()
+					circle:Destroy()
+				end)
+			end)
+			clicker.MouseButton1Click:Connect(function()
+				runCallback(ButtonSettings.Callback)
+			end)
+
+			local ButtonValue = {}
+			function ButtonValue:Set(newName)
+				label.Text = newName
+				card:SetAttribute("SearchName", newName or "")
+			end
+			return ButtonValue
 		end
 
 		function Tab:CreateProgressBar(ProgressSettings)

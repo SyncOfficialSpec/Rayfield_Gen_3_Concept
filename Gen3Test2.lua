@@ -17,9 +17,9 @@ local Window = Rayfield:CreateWindow({
 
 local Test = Window:CreateTab("New Stuff", "sparkles")
 
-Test:CreateSection("Button ripple")
+Test:CreateSection("Ripple button")
 
-Test:CreateButton({
+Test:CreateRippleButton({
 	Name = "Click me",
 	Icon = "mouse-pointer-click",
 	Description = "Ripple spreads from wherever you press.",
@@ -29,9 +29,9 @@ Test:CreateButton({
 })
 
 Test:CreateButton({
-	Name = "Click me too",
+	Name = "Normal button for comparison",
 	Callback = function()
-		print("Second ripple button clicked")
+		print("Normal button clicked")
 	end,
 })
 
