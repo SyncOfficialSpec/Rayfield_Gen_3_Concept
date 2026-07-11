@@ -3245,12 +3245,39 @@ function RayfieldLibrary:CreateWindow(Settings)
 				descFor(card, ButtonSettings.Description)
 			end
 			hoverable(card)
+			card.ClipsDescendants = true
 			local clicker = create("TextButton", {
 				BackgroundTransparency = 1,
 				Text = "",
 				Size = UDim2.fromScale(1, 1),
 				Parent = card,
 			})
+			clicker.InputBegan:Connect(function(input)
+				if input.UserInputType ~= Enum.UserInputType.MouseButton1
+					and input.UserInputType ~= Enum.UserInputType.Touch then
+					return
+				end
+				local rx = math.clamp(input.Position.X - card.AbsolutePosition.X, 0, card.AbsoluteSize.X)
+				local ry = math.clamp(input.Position.Y - card.AbsolutePosition.Y, 0, card.AbsoluteSize.Y)
+				local circle = create("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromOffset(rx, ry),
+					Size = UDim2.fromOffset(0, 0),
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+					BackgroundTransparency = 0.88,
+					ZIndex = 4,
+					Parent = card,
+				})
+				roundFull(circle)
+				local span = math.max(card.AbsoluteSize.X, card.AbsoluteSize.Y) * 2.2
+				tween(circle, TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					Size = UDim2.fromOffset(span, span),
+					BackgroundTransparency = 1,
+				})
+				task.delay(0.6, function()
+					circle:Destroy()
+				end)
+			end)
 			clicker.MouseButton1Click:Connect(function()
 				tween(card, TweenInfo.new(0.07,Enum.EasingStyle.Quad), {BackgroundColor3 = Theme.CardSelected})
 				task.delay(0.09,function()
@@ -3603,6 +3630,133 @@ function RayfieldLibrary:CreateWindow(Settings)
 				card:SetAttribute("SearchName", frontLabel.Text .. " " .. backLabel.Text)
 			end
 			return FlipValue
+		end
+
+		function Tab:CreateProgressBar(ProgressSettings)
+			ProgressSettings = ProgressSettings or {}
+			local maxValue = ProgressSettings.MaxValue or 100
+			local card, label, textX = makeCard(page, ProgressSettings.Name, ProgressSettings.Icon, 50)
+			descFor(card, ProgressSettings.Description)
+			hoverable(card)
+			label.Size = UDim2.new(0.42, -textX, 0, 18)
+
+			local valueLabel = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -16, 0.5, 0),
+				Size = UDim2.fromOffset(42, 16),
+				Font = FONT_REGULAR,
+				TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				Text = "",
+				Parent = card,
+			})
+			paint(valueLabel, "TextColor3", "TextSub")
+
+			local track = create("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -66, 0.5, 0),
+				Size = UDim2.new(0.4, 0, 0, 10),
+				BackgroundColor3 = Color3.fromRGB(47, 47, 47),
+			})
+			roundFull(track)
+			track.Parent = card
+
+			local fill = create("Frame", {
+				Size = UDim2.new(0, 0, 1, 0),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				Parent = track,
+			})
+			roundFull(fill)
+			create("UIGradient", {
+				Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.fromRGB(42, 88, 66)),
+					ColorSequenceKeypoint.new(1, Color3.fromRGB(74, 178, 124)),
+				}),
+				Parent = fill,
+			})
+
+			local Progress = {CurrentValue = 0}
+			local function apply(value, animate)
+				value = math.clamp(tonumber(value) or 0, 0, maxValue)
+				Progress.CurrentValue = value
+				local frac = maxValue > 0 and value / maxValue or 0
+				valueLabel.Text = ProgressSettings.Suffix
+					and (tostring(math.floor(value + 0.5)) .. ProgressSettings.Suffix)
+					or (tostring(math.floor(frac * 100 + 0.5)) .. "%")
+				local goal = UDim2.new(frac, 0, 1, 0)
+				if animate then
+					tween(fill, TI_SMOOTH, {Size = goal})
+				else
+					fill.Size = goal
+				end
+			end
+			apply(ProgressSettings.CurrentValue or 0, false)
+
+			function Progress:Set(value)
+				apply(value, true)
+			end
+			return Progress
+		end
+
+		function Tab:CreateScrollHint(HintSettings)
+			HintSettings = HintSettings or {}
+			local holder = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 40),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			holder:SetAttribute("SearchName", HintSettings.Text or "")
+
+			local center = create("Frame", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 1, 0),
+				Parent = holder,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 10),
+				Parent = center,
+			})
+			local lbl = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 1, 0),
+				Font = FONT_MEDIUM,
+				TextSize = 15,
+				Text = HintSettings.Text or "Scroll to see more",
+				LayoutOrder = 1,
+				Parent = center,
+			})
+			paint(lbl, "TextColor3", "TextBody")
+
+			local arrowWell = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(16, 24),
+				LayoutOrder = 2,
+				Parent = center,
+			})
+			local arrow = makeIcon(arrowWell, HintSettings.Icon or "arrow-down", 16, Theme.TextBody, 0.1)
+			if arrow then
+				arrow.AnchorPoint = Vector2.new(0.5, 0)
+				arrow.Position = UDim2.new(0.5, 0, 0, 0)
+				tween(arrow, TweenInfo.new(0.55, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {
+					Position = UDim2.new(0.5, 0, 0, 7),
+				})
+			end
+
+			local Hint = {}
+			function Hint:Set(newText)
+				lbl.Text = newText or lbl.Text
+				holder:SetAttribute("SearchName", lbl.Text)
+			end
+			return Hint
 		end
 
 		function Tab:CreateSlider(SliderSettings)
