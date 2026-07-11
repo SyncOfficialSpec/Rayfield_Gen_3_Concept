@@ -3245,11 +3245,18 @@ function RayfieldLibrary:CreateWindow(Settings)
 				descFor(card, ButtonSettings.Description)
 			end
 			hoverable(card)
-			card.ClipsDescendants = true
+			local rippleClip = create("CanvasGroup", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 4,
+				Parent = card,
+			})
+			round(rippleClip, 14)
 			local clicker = create("TextButton", {
 				BackgroundTransparency = 1,
 				Text = "",
 				Size = UDim2.fromScale(1, 1),
+				ZIndex = 5,
 				Parent = card,
 			})
 			clicker.InputBegan:Connect(function(input)
@@ -3265,8 +3272,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 					Size = UDim2.fromOffset(0, 0),
 					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 					BackgroundTransparency = 0.88,
-					ZIndex = 4,
-					Parent = card,
+					Parent = rippleClip,
 				})
 				roundFull(circle)
 				local span = math.max(card.AbsoluteSize.X, card.AbsoluteSize.Y) * 2.2
