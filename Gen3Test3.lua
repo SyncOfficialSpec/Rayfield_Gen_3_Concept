@@ -67,6 +67,15 @@ Test:CreateSection("Cursor tag")
 local Tag = Test:CreateCursorTag({
 	Text = "Designer",
 	Hint = "Move your mouse over this area",
+	Scope = "Area",
+})
+
+Test:CreateCursorTag({
+	Text = "You",
+	Height = 70,
+	Hint = "Window scope: this one follows you across the whole menu",
+	Scope = "Window",
+	Offset = {X = 16, Y = 22},
 })
 
 Test:CreateButton({

@@ -1829,26 +1829,39 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	local function tipFor(card, text)
 		if not text or text == "" then return end
+		local hovering = false
 		card.MouseEnter:Connect(function()
+			hovering = true
 			tipOwner = card
-			task.delay(0.15, function()
-				if tipOwner ~= card or not card.Parent then return end
+			task.delay(0.4, function()
+				if not hovering or tipOwner ~= card or not card.Parent then return end
 				local tip = ensureTip()
 				tip.Text = text
-				local cx = card.AbsolutePosition.X + card.AbsoluteSize.X / 2
-				local cy = card.AbsolutePosition.Y - 6
-				tip.Position = UDim2.fromOffset(cx, cy + 5)
 				tip.Visible = true
 				tip.TextTransparency = 1
 				tip.BackgroundTransparency = 1
-				tween(tip, TI_FAST, {TextTransparency = 0, BackgroundTransparency = 0, Position = UDim2.fromOffset(cx, cy)})
+				task.wait()
+				if not hovering or tipOwner ~= card then
+					tip.Visible = false
+					return
+				end
+				local m = UserInputService:GetMouseLocation()
+				local cam = workspace.CurrentCamera
+				local vw = cam and cam.ViewportSize.X or 1920
+				local half = tip.AbsoluteSize.X / 2
+				local cx = math.clamp(m.X, half + 4, vw - half - 4)
+				local cy = m.Y - 10
+				tip.Position = UDim2.fromOffset(cx, cy + 6)
+				tween(tip, TI_SMOOTH, {TextTransparency = 0, BackgroundTransparency = 0, Position = UDim2.fromOffset(cx, cy)})
 			end)
 		end)
 		card.MouseLeave:Connect(function()
+			hovering = false
 			if tipOwner == card then tipOwner = nil end
 			if tipLabel then tipLabel.Visible = false end
 		end)
 	end
+
 
 	local function buildTabAPI(page, compact)
 		local Tab = {}
@@ -3845,40 +3858,59 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 		function Tab:CreatePinnedList(ListSettings)
 			ListSettings = ListSettings or {}
+			local ITEM_H, GAP, HEADER_H = 54, 8, 20
 			local holder = create("Frame", {
 				BackgroundTransparency = 1,
-				AutomaticSize = Enum.AutomaticSize.Y,
 				Size = UDim2.new(1, 0, 0, 0),
 				LayoutOrder = nextOrder(),
 				Parent = page,
 			})
-			create("UIListLayout", {
-				FillDirection = Enum.FillDirection.Vertical,
-				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 8),
-				Parent = holder,
-			})
 			local header = create("TextLabel", {
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, 0, 0, 20),
+				Size = UDim2.new(1, 0, 0, HEADER_H),
 				Font = FONT_MEDIUM,
 				TextSize = 13,
 				TextXAlignment = Enum.TextXAlignment.Left,
 				Text = ListSettings.Title or "All Items",
-				LayoutOrder = 5000,
 				Parent = holder,
 			})
 			paint(header, "TextColor3", "TextSub")
 			create("UIPadding", {PaddingLeft = UDim.new(0, 4), Parent = header})
 
 			local List = {}
+			local items = {}
 			local itemsByName = {}
 			local pinSerial = 0
 
+			local function relayout(animate)
+				local pinned, unpinned = {}, {}
+				for _, item in ipairs(items) do
+					table.insert(item.Pinned and pinned or unpinned, item)
+				end
+				table.sort(pinned, function(x, y) return x.PinStamp < y.PinStamp end)
+				local y = 0
+				local function place(inst, h)
+					local goal = UDim2.fromOffset(0, y)
+					if animate then
+						tween(inst, TI_MORPH, {Position = goal})
+					else
+						inst.Position = goal
+					end
+					y = y + h + GAP
+				end
+				for _, item in ipairs(pinned) do
+					place(item.Card, ITEM_H)
+				end
+				place(header, HEADER_H)
+				for _, item in ipairs(unpinned) do
+					place(item.Card, ITEM_H)
+				end
+				holder.Size = UDim2.new(1, 0, 0, math.max(0, y - GAP))
+			end
+
 			local function makeItem(cfg, index)
 				local card = create("Frame", {
-					Size = UDim2.new(1, 0, 0, 54),
-					LayoutOrder = 10000 + index,
+					Size = UDim2.new(1, 0, 0, ITEM_H),
 					Parent = holder,
 				})
 				card:SetAttribute("SearchName", cfg.Name or "")
@@ -3945,7 +3977,13 @@ function RayfieldLibrary:CreateWindow(Settings)
 					pinIcon.Position = UDim2.fromScale(0.5, 0.5)
 				end
 
-				local item = {Name = cfg.Name or ("Item " .. index), Pinned = false, Order = index}
+				local item = {
+					Name = cfg.Name or ("Item " .. index),
+					Pinned = false,
+					PinStamp = 0,
+					Order = index,
+					Card = card,
+				}
 				local function refreshPin()
 					local show = item.Pinned
 					tween(pinBtn, TI_FAST, {BackgroundTransparency = show and 0.25 or 1})
@@ -3958,13 +3996,12 @@ function RayfieldLibrary:CreateWindow(Settings)
 					item.Pinned = state
 					if state then
 						pinSerial = pinSerial + 1
-						card.LayoutOrder = pinSerial
-					else
-						card.LayoutOrder = 10000 + item.Order
+						item.PinStamp = pinSerial
 					end
+					relayout(true)
 					refreshPin()
 					tween(card, TweenInfo.new(0.07, Enum.EasingStyle.Quad), {BackgroundColor3 = Theme.CardSelected})
-					task.delay(0.12, function()
+					task.delay(0.14, function()
 						tween(card, TI_MED, {BackgroundColor3 = Theme.Card})
 					end)
 					if not silent then
@@ -3984,15 +4021,21 @@ function RayfieldLibrary:CreateWindow(Settings)
 				end)
 				card.MouseLeave:Connect(refreshPin)
 
+				table.insert(items, item)
 				itemsByName[item.Name] = item
-				if cfg.Pinned then
-					setPinned(true, true)
-				end
 			end
 
 			for i, cfg in ipairs(ListSettings.Items or {}) do
 				makeItem(cfg, i)
 			end
+			for i, cfg in ipairs(ListSettings.Items or {}) do
+				if cfg.Pinned and items[i] then
+					items[i].Pinned = true
+					pinSerial = pinSerial + 1
+					items[i].PinStamp = pinSerial
+				end
+			end
+			relayout(false)
 
 			function List:Pin(name, state)
 				local item = itemsByName[name]
@@ -4002,12 +4045,11 @@ function RayfieldLibrary:CreateWindow(Settings)
 			end
 			function List:GetPinned()
 				local out = {}
-				for name, item in pairs(itemsByName) do
+				for _, item in ipairs(items) do
 					if item.Pinned then
-						table.insert(out, name)
+						table.insert(out, item.Name)
 					end
 				end
-				table.sort(out)
 				return out
 			end
 			return List
@@ -4015,6 +4057,10 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 		function Tab:CreateCursorTag(TagSettings)
 			TagSettings = TagSettings or {}
+			local scope = TagSettings.Scope or "Area"
+			local offX = (TagSettings.Offset and TagSettings.Offset.X) or 14
+			local offY = (TagSettings.Offset and TagSettings.Offset.Y) or 18
+
 			local card = create("Frame", {
 				Size = UDim2.new(1, 0, 0, TagSettings.Height or 110),
 				LayoutOrder = nextOrder(),
@@ -4035,6 +4081,22 @@ function RayfieldLibrary:CreateWindow(Settings)
 			})
 			paint(hint, "TextColor3", "TextSub")
 
+			local region, chipParent
+			if scope == "Screen" then
+				region = nil
+				chipParent = ensureRoot()
+			elseif scope == "Window" then
+				local node = page
+				while node.Parent and not node.Parent:IsA("ScreenGui") do
+					node = node.Parent
+				end
+				region = node
+				chipParent = node
+			else
+				region = card
+				chipParent = card
+			end
+
 			local chip = create("TextLabel", {
 				AutomaticSize = Enum.AutomaticSize.XY,
 				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
@@ -4043,28 +4105,59 @@ function RayfieldLibrary:CreateWindow(Settings)
 				TextSize = 12,
 				Text = TagSettings.Text or "Tag",
 				Visible = false,
-				ZIndex = 6,
-				Parent = card,
+				TextTransparency = 1,
+				BackgroundTransparency = 1,
+				ZIndex = 5000,
+				Parent = chipParent,
 			})
 			round(chip, 6)
 			padAll(chip, 4, 8, 4, 8)
 
-			card.InputChanged:Connect(function(input)
-				if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-				chip.Position = UDim2.fromOffset(
-					input.Position.X - card.AbsolutePosition.X + 14,
-					input.Position.Y - card.AbsolutePosition.Y + 18
-				)
-			end)
-			card.MouseEnter:Connect(function()
+			local shown = false
+			local hideToken = 0
+			local function showChip()
+				hideToken = hideToken + 1
+				shown = true
 				chip.Visible = true
-				chip.TextTransparency = 1
-				chip.BackgroundTransparency = 1
 				tween(chip, TI_FAST, {TextTransparency = 0, BackgroundTransparency = 0})
-			end)
-			card.MouseLeave:Connect(function()
-				chip.Visible = false
-			end)
+			end
+			local function hideChip()
+				hideToken = hideToken + 1
+				local myToken = hideToken
+				shown = false
+				tween(chip, TI_FAST, {TextTransparency = 1, BackgroundTransparency = 1})
+				task.delay(0.16, function()
+					if hideToken == myToken and not shown then
+						chip.Visible = false
+					end
+				end)
+			end
+			local function moveTo(px, py)
+				local base = chipParent.AbsolutePosition
+				local bounds = chipParent.AbsoluteSize
+				local cw = math.max(chip.AbsoluteSize.X, 24)
+				local ch = math.max(chip.AbsoluteSize.Y, 16)
+				local x = math.clamp(px - base.X + offX, 2, math.max(2, bounds.X - cw - 2))
+				local y = math.clamp(py - base.Y + offY, 2, math.max(2, bounds.Y - ch - 2))
+				tween(chip, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+					Position = UDim2.fromOffset(x, y),
+				})
+			end
+
+			if region then
+				region.InputChanged:Connect(function(input)
+					if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+					moveTo(input.Position.X, input.Position.Y)
+				end)
+				region.MouseEnter:Connect(showChip)
+				region.MouseLeave:Connect(hideChip)
+			else
+				connect(UserInputService.InputChanged, function(input)
+					if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+					if not shown then showChip() end
+					moveTo(input.Position.X, input.Position.Y)
+				end)
+			end
 
 			local Tag = {}
 			function Tag:Set(newText)
