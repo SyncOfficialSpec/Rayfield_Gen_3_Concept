@@ -53,6 +53,45 @@ Home:CreateSlider({
 	end,
 })
 
+Home:CreateSection("New in Gen 3")
+
+Home:CreateCheckbox({
+	Name = "Accept terms and conditions",
+	CurrentValue = false,
+	Flag = "AcceptedTerms",
+	Callback = function(value)
+		print("Terms accepted:", value)
+	end,
+})
+
+Home:CreateCopyButton({
+	Name = "Copy Discord Invite",
+	Icon = "link",
+	Description = "Copies the invite link to your clipboard.",
+	Text = "https://discord.gg/hXtTC9SVfX",
+	Callback = function(text)
+		Rayfield:Notify({
+			Title = "Copied",
+			Content = text,
+			Duration = 3,
+			Image = "clipboard-check",
+		})
+	end,
+})
+
+Home:CreateFlipButton({
+	Front = "Front Button",
+	Back = "Back Button",
+	Callback = function()
+		Rayfield:Notify({
+			Title = "Flip button",
+			Content = "You clicked the back face.",
+			Duration = 3,
+			Image = "rotate-3d",
+		})
+	end,
+})
+
 Home:CreateSection("Notifications")
 
 Home:CreateButton({

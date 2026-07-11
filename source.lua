@@ -1139,7 +1139,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			if destroyed then return end
 			local out = {}
 			for flag, element in pairs(RayfieldLibrary.Flags) do
-				if element.Type == "Toggle" or element.Type == "Slider" or element.Type == "Input" then
+				if element.Type == "Toggle" or element.Type == "Checkbox" or element.Type == "Slider" or element.Type == "Input" then
 					out[flag] = element.CurrentValue
 				elseif element.Type == "Dropdown" then
 					out[flag] = element.CurrentOption
@@ -1650,6 +1650,28 @@ function RayfieldLibrary:CreateWindow(Settings)
 		})
 		padAll(page, 2,5, 16, 1)
 
+		local railTrack = create("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -1, 0, 4),
+			Size = UDim2.new(0, 3, 1, -8),
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			BackgroundTransparency = 1,
+			Parent = pageWrapper,
+		})
+		roundFull(railTrack)
+		local railFill = create("Frame", {
+			Size = UDim2.new(1, 0, 0, 0),
+			BackgroundTransparency = 1,
+			Parent = railTrack,
+		})
+		paint(railFill, "BackgroundColor3", "Accent")
+		roundFull(railFill)
+		create("UISizeConstraint", {
+			MinSize = Vector2.new(0, 6),
+			Parent = railFill,
+		})
+		local railShown = false
+
 		local EDGE = 0.05
 		local function updateFade()
 			local vh = page.AbsoluteWindowSize.Y
@@ -1667,6 +1689,15 @@ function RayfieldLibrary:CreateWindow(Settings)
 					NumberSequenceKeypoint.new(1 - EDGE,0),
 					NumberSequenceKeypoint.new(1, botT),
 				})
+			end
+			local scrollable = maxScroll > 4
+			if scrollable then
+				railFill.Size = UDim2.new(1, 0, math.clamp(pos / maxScroll, 0, 1), 0)
+			end
+			if scrollable ~= railShown then
+				railShown = scrollable
+				tween(railTrack, TI_MED, {BackgroundTransparency = scrollable and 0.92 or 1})
+				tween(railFill, TI_MED, {BackgroundTransparency = scrollable and 0.12 or 1})
 			end
 		end
 		page:GetPropertyChangedSignal("CanvasPosition"):Connect(updateFade)
@@ -3340,6 +3371,263 @@ function RayfieldLibrary:CreateWindow(Settings)
 				RayfieldLibrary.Flags[ToggleSettings.Flag] = Toggle
 			end
 			return Toggle
+		end
+
+		function Tab:CreateCheckbox(CheckboxSettings)
+			CheckboxSettings = CheckboxSettings or {}
+			local card = create("Frame", {
+				Size = UDim2.new(1, 0, 0, 50),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", CheckboxSettings.Name or "")
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+			descFor(card, CheckboxSettings.Description)
+			hoverable(card)
+
+			local box = create("Frame", {
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, 15, 0.5, 0),
+				Size = UDim2.fromOffset(26, 26),
+				BackgroundColor3 = Theme.ToggleTrack,
+			})
+			round(box, 8)
+			local boxStroke = create("UIStroke", {
+				Color = Color3.fromRGB(255, 255, 255),
+				Transparency = 0.84,
+				Parent = box,
+			})
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(255, 255,255), Color3.fromRGB(196, 196, 196)),
+				Parent = box,
+			})
+			box.Parent = card
+
+			local check = makeIcon(box, "check", 18, Color3.fromRGB(26, 26, 26), 1)
+			check.AnchorPoint = Vector2.new(0.5, 0.5)
+			check.Position = UDim2.fromScale(0.5, 0.5)
+			check.Size = UDim2.fromOffset(10, 10)
+
+			local label = create("TextLabel",{
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, 53, 0.5, 0),
+				Size = UDim2.new(1, -69, 0, 18),
+				Font = FONT_MEDIUM,
+				TextSize = 16,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Text = CheckboxSettings.Name or "",
+				Parent = card,
+			})
+			paint(label, "TextColor3", "TextBody")
+
+			local Checkbox = {
+				Type = "Checkbox",
+				CurrentValue = CheckboxSettings.CurrentValue == true,
+			}
+
+			local function render(animate)
+				local on = Checkbox.CurrentValue
+				local info = animate and TI_SMOOTH or TweenInfo.new(0)
+				tween(box, info, {BackgroundColor3 = on and Theme.Knob or Theme.ToggleTrack})
+				tween(boxStroke, info, {Transparency = on and 1 or 0.84})
+				if on then
+					if animate then check.Size = UDim2.fromOffset(10, 10) end
+					tween(check, info, {ImageTransparency = 0, Size = UDim2.fromOffset(18, 18)})
+				else
+					tween(check, animate and TI_FAST or TweenInfo.new(0), {ImageTransparency = 1, Size = UDim2.fromOffset(10, 10)})
+				end
+			end
+			render(false)
+
+			local clicker = create("TextButton",{
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1,1),
+				Parent = card,
+			})
+			clicker.MouseButton1Click:Connect(function()
+				Checkbox.CurrentValue = not Checkbox.CurrentValue
+				render(true)
+				runCallback(CheckboxSettings.Callback, Checkbox.CurrentValue)
+				saveConfiguration()
+			end)
+
+			function Checkbox:Set(value)
+				Checkbox.CurrentValue = value == true
+				render(true)
+				runCallback(CheckboxSettings.Callback, Checkbox.CurrentValue)
+				saveConfiguration()
+			end
+
+			if CheckboxSettings.Flag then
+				Checkbox.Flag = CheckboxSettings.Flag
+				RayfieldLibrary.Flags[CheckboxSettings.Flag] = Checkbox
+			end
+			return Checkbox
+		end
+
+		function Tab:CreateCopyButton(CopySettings)
+			CopySettings = CopySettings or {}
+			local card, label = makeCard(page, CopySettings.Name, CopySettings.Icon, 50)
+			descFor(card, CopySettings.Description)
+			hoverable(card)
+
+			local well = create("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -12, 0.5, 0),
+				Size = UDim2.fromOffset(30, 30),
+				BackgroundColor3 = Theme.Knob,
+			})
+			round(well, 9)
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(255, 255,255), Color3.fromRGB(196, 196, 196)),
+				Parent = well,
+			})
+			well.Parent = card
+
+			local copyIcon = makeIcon(well, "copy", 16, Color3.fromRGB(26, 26, 26), 0)
+			copyIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+			copyIcon.Position = UDim2.fromScale(0.5, 0.5)
+			local checkIcon = makeIcon(well, "check", 16, Color3.fromRGB(26, 26, 26), 1)
+			checkIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+			checkIcon.Position = UDim2.fromScale(0.5, 0.5)
+			checkIcon.Size = UDim2.fromOffset(10, 10)
+
+			local CopyValue = {
+				CurrentValue = tostring(CopySettings.Text or CopySettings.Value or ""),
+			}
+
+			local copied = false
+			local function copyToClipboard(text)
+				return pcall(function()
+					if type(setclipboard) == "function" then
+						setclipboard(text)
+					elseif type(toclipboard) == "function" then
+						toclipboard(text)
+					elseif type(writeclipboard) == "function" then
+						writeclipboard(text)
+					elseif type(Clipboard) == "table" and type(Clipboard.set) == "function" then
+						Clipboard.set(text)
+					else
+						error("clipboard is not available")
+					end
+				end)
+			end
+
+			local clicker = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				Parent = card,
+			})
+			clicker.MouseButton1Click:Connect(function()
+				if copied then return end
+				local ok = copyToClipboard(CopyValue.CurrentValue)
+				if not ok then
+					RayfieldLibrary:Notify({Title = "Copy failed", Content = "Your executor does not expose a clipboard function.", Duration = 4, Image = "clipboard-x"})
+					return
+				end
+				copied = true
+				tween(copyIcon, TI_FAST, {ImageTransparency = 1, Size = UDim2.fromOffset(10, 10)})
+				tween(checkIcon, TI_SMOOTH, {ImageTransparency = 0, Size = UDim2.fromOffset(16, 16)})
+				runCallback(CopySettings.Callback, CopyValue.CurrentValue)
+				task.delay(1.4, function()
+					if not well.Parent then return end
+					copied = false
+					tween(checkIcon, TI_FAST, {ImageTransparency = 1, Size = UDim2.fromOffset(10, 10)})
+					tween(copyIcon, TI_SMOOTH, {ImageTransparency = 0, Size = UDim2.fromOffset(16, 16)})
+				end)
+			end)
+
+			function CopyValue:Set(newText)
+				CopyValue.CurrentValue = tostring(newText or "")
+			end
+			function CopyValue:SetName(newName)
+				label.Text = newName or ""
+				card:SetAttribute("SearchName", newName or "")
+			end
+			return CopyValue
+		end
+
+		function Tab:CreateFlipButton(FlipSettings)
+			FlipSettings = FlipSettings or {}
+			local frontText = FlipSettings.Front or FlipSettings.Name or "Front"
+			local backText = FlipSettings.Back or frontText
+
+			local card = create("Frame", {
+				Size = UDim2.new(1, 0, 0, 50),
+				LayoutOrder = nextOrder(),
+				ClipsDescendants = true,
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", frontText .. " " .. backText)
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+			descFor(card, FlipSettings.Description)
+
+			local function makeFace(text, dark)
+				local layer = create("Frame", {
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Parent = card,
+				})
+				local lbl = create("TextLabel", {
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Font = FONT_MEDIUM,
+					TextSize = 16,
+					Text = text,
+					Parent = layer,
+				})
+				if dark then
+					lbl.TextColor3 = Color3.fromRGB(28, 28, 28)
+				else
+					paint(lbl, "TextColor3", "TextBody")
+				end
+				return layer, lbl
+			end
+			local frontLayer, frontLabel = makeFace(frontText, false)
+			local backLayer, backLabel = makeFace(backText, true)
+			backLayer.Position = UDim2.fromScale(0, -1)
+
+			local flipped = false
+			local function render(state)
+				if flipped == state then return end
+				flipped = state
+				tween(frontLayer, TI_MORPH, {Position = state and UDim2.fromScale(0, 1) or UDim2.fromScale(0, 0)})
+				tween(backLayer, TI_MORPH, {Position = state and UDim2.fromScale(0, 0) or UDim2.fromScale(0, -1)})
+				tween(card, TI_MORPH, {BackgroundColor3 = state and Theme.Knob or Theme.Card})
+			end
+			card.MouseEnter:Connect(function() render(true) end)
+			card.MouseLeave:Connect(function() render(false) end)
+
+			local clicker = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				Parent = card,
+			})
+			clicker.MouseButton1Click:Connect(function()
+				runCallback(FlipSettings.Callback)
+			end)
+
+			local FlipValue = {}
+			function FlipValue:Set(newSettings)
+				newSettings = newSettings or {}
+				if newSettings.Front then
+					frontLabel.Text = newSettings.Front
+				end
+				if newSettings.Back then
+					backLabel.Text = newSettings.Back
+				end
+				card:SetAttribute("SearchName", frontLabel.Text .. " " .. backLabel.Text)
+			end
+			return FlipValue
 		end
 
 		function Tab:CreateSlider(SliderSettings)

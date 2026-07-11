@@ -34,6 +34,10 @@ See `example.lua` for a full demo covering every element.
 * Stat cards with a green gradient for showing values like currency
 * Line, bar and stacked charts with hover crosshairs, rolling values and a build in animation
 * FAQ accordion cards that expand one answer at a time
+* Checkboxes with a popping check animation, saved through configuration flags
+* Copy buttons that put text on the clipboard and morph the icon into a checkmark
+* Flip buttons that roll over to a light back face on hover
+* A slim scroll rail on the right edge of every page that fills with your scroll position
 * Header badge pill, for things like a language or region tag
 * Key system with saved keys and keys fetched from a site
 
@@ -150,6 +154,56 @@ local Stat = Tab:CreateStat({
 })
 Stat:Set({Value = "$40", Delta = "+90%"})
 ```
+
+### Checkbox (new in Gen 3)
+
+A rounded square box on the left of the label. Checking it fills the box white and
+pops a dark checkmark in. Works with `Flag` and configuration saving like a toggle.
+
+```lua
+Tab:CreateCheckbox({
+	Name = "Accept terms and conditions",
+	CurrentValue = false,
+	Flag = "AcceptedTerms",
+	Callback = function(value) end,
+})
+```
+
+### Copy button (new in Gen 3)
+
+A card with a small white icon button on the right. Clicking it copies `Text` to the
+clipboard and the copy icon morphs into a checkmark for a moment before flipping
+back. Uses your executor's `setclipboard` (with fallbacks), and warns if none exists.
+
+```lua
+local Invite = Tab:CreateCopyButton({
+	Name = "Copy Discord Invite",
+	Icon = "link",
+	Text = "https://discord.gg/hXtTC9SVfX",
+	Callback = function(text) end,
+})
+Invite:Set("https://discord.gg/newinvite")
+```
+
+### Flip button (new in Gen 3)
+
+A button with two faces. Hovering rolls the card over vertically: the dark front
+face slides down and out while a light back face rolls in from the top. Moving the
+mouse away rolls it back. Clicking fires the callback.
+
+```lua
+Tab:CreateFlipButton({
+	Front = "Front Button",
+	Back = "Back Button",
+	Callback = function() end,
+})
+```
+
+### Scroll rail (new in Gen 3)
+
+Not an element, just built in: every page that can scroll gets a slim accent rail on
+its right edge that fills top to bottom with your scroll position. Pages that fit
+without scrolling hide it automatically.
 
 ### FAQ (new in Gen 3)
 
