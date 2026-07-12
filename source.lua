@@ -1526,6 +1526,12 @@ function RayfieldLibrary:CreateWindow(Settings)
 		f = 1 + f
 		return Color3.new(c.R * f, c.G * f, c.B * f)
 	end
+
+	local function pillTextColor()
+		if tabStyle ~= "Accent" then return Color3.fromRGB(28, 28, 28) end
+		local lum = 0.299 * tabAccent.R + 0.587 * tabAccent.G + 0.114 * tabAccent.B
+		return lum > 0.62 and Color3.fromRGB(24, 24, 24) or Color3.fromRGB(255, 255, 255)
+	end
 	local dockTrack = create("Frame", {
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 2, 0.5, 0),
@@ -1559,7 +1565,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 		ZIndex = 2,
 		Parent = body,
 	})
-	local dockGlow = softGlow(dockGlowHost, tabAccent, 0.4, 58, 2)
+	local dockGlow = softGlow(dockGlowHost, tabAccent, 0.5, 30, 2)
 	glowSet(dockGlow, 0)
 	local dockButtons = create("Frame", {
 		BackgroundTransparency = 1,
@@ -1824,7 +1830,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 	applyTabStyle()
 
 	local function styleTabPills()
-		local activeColor = tabStyle == "Accent" and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(28, 28, 28)
+		local activeColor = pillTextColor()
 		for _,other in ipairs(tabs) do
 			local active = (not settingsOpen) and other == currentTab
 			tween(other.PillLabel, TI_FAST, {TextColor3 = active and activeColor or Theme.TextSub})
@@ -6093,6 +6099,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 		if typeof(color) == "Color3" then
 			tabAccent = color
 			applyTabStyle()
+			styleTabPills()
 		end
 	end
 
