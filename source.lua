@@ -1476,18 +1476,63 @@ function RayfieldLibrary:CreateWindow(Settings)
 		BorderSizePixel = 0,
 		Parent = body,
 	})
-	create("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		VerticalAlignment=Enum.VerticalAlignment.Center,
-		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, 8),
+
+	local tabStyle = (Settings.TabStyle == "Accent") and "Accent" or "White"
+	local dockTrack = create("Frame", {
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 2, 0.5, 0),
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.new(0, 0, 0, 44),
+		BackgroundColor3 = Theme.CardInset,
+		BackgroundTransparency = 0.25,
 		Parent = tabBar,
 	})
-
+	roundFull(dockTrack)
+	local dockIndicator = create("Frame", {
+		Position = UDim2.fromOffset(4, 4),
+		Size = UDim2.fromOffset(0, 36),
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		BackgroundTransparency = 1,
+		ZIndex = 2,
+		Parent = dockTrack,
+	})
+	roundFull(dockIndicator)
+	local dockIndicatorGrad = create("UIGradient", {
+		Rotation = 90,
+		Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224)),
+		Parent = dockIndicator,
+	})
+	local dockGlow = create("ImageLabel", {
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 7),
+		Size = UDim2.new(1, 26, 1, 20),
+		Image = GLOW_IMAGE,
+		ImageColor3 = Theme.Accent,
+		ImageTransparency = 1,
+		ScaleType = Enum.ScaleType.Slice,
+		SliceCenter = Rect.new(49, 49, 450, 450),
+		ZIndex = 1,
+		Parent = dockIndicator,
+	})
+	local dockButtons = create("Frame", {
+		BackgroundTransparency = 1,
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.new(0, 0, 1, 0),
+		ZIndex = 3,
+		Parent = dockTrack,
+	})
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 2),
+		Parent = dockButtons,
+	})
 	create("UIPadding", {
-		PaddingLeft = UDim.new(0, 2),
-		PaddingRight = UDim.new(0, 2),
-		Parent = tabBar,
+		PaddingLeft = UDim.new(0, 4),
+		PaddingRight = UDim.new(0, 4),
+		Parent = dockButtons,
 	})
 
 	local searchHolder = create("Frame", {
@@ -1691,16 +1736,50 @@ function RayfieldLibrary:CreateWindow(Settings)
 		tween(wrapper, TweenInfo.new(0.32,Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {Position = UDim2.fromOffset(0, 0)})
 	end
 
+	local TI_DOCK = TweenInfo.new(0.32, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+
+	local function moveIndicator(animate)
+		local target = (not settingsOpen) and currentTab or nil
+		if not target or not target.Pill then
+			tween(dockIndicator, TI_FAST, {BackgroundTransparency = 1})
+			tween(dockGlow, TI_FAST, {ImageTransparency = 1})
+			return
+		end
+		local btn = target.Pill
+		local x = btn.AbsolutePosition.X - dockTrack.AbsolutePosition.X
+		local goalPos = UDim2.fromOffset(x, 4)
+		local goalSize = UDim2.fromOffset(btn.AbsoluteSize.X, 36)
+		local glowGoal = tabStyle == "Accent" and 0.45 or 1
+		if animate then
+			tween(dockIndicator, TI_DOCK, {Position = goalPos, Size = goalSize, BackgroundTransparency = 0})
+			tween(dockGlow, TI_DOCK, {ImageTransparency = glowGoal})
+		else
+			dockIndicator.Position = goalPos
+			dockIndicator.Size = goalSize
+			dockIndicator.BackgroundTransparency = 0
+			dockGlow.ImageTransparency = glowGoal
+		end
+	end
+
+	local function applyTabStyle()
+		if tabStyle == "Accent" then
+			dockIndicatorGrad.Color = ColorSequence.new(Color3.fromRGB(96, 200, 148), Color3.fromRGB(52, 124, 88))
+		else
+			dockIndicatorGrad.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224))
+		end
+	end
+	applyTabStyle()
+
 	local function styleTabPills()
+		local activeColor = tabStyle == "Accent" and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(28, 28, 28)
 		for _,other in ipairs(tabs) do
 			local active = (not settingsOpen) and other == currentTab
-			tween(other.Pill, TI_FAST,{BackgroundColor3 = active and Color3.fromRGB(46, 46, 46) or Theme.CardInset, BackgroundTransparency = active and 0 or 0.35})
-			tween(other.PillLabel, TI_FAST, {TextColor3 = active and Theme.TextTitle or Theme.TextSub})
+			tween(other.PillLabel, TI_FAST, {TextColor3 = active and activeColor or Theme.TextSub})
 			if other.PillIcon then
-				tween(other.PillIcon, TI_FAST, {ImageColor3 = active and Theme.TextTitle or Theme.TextSub})
+				tween(other.PillIcon, TI_FAST, {ImageColor3 = active and activeColor or Theme.TextSub})
 			end
-			tween(other.PillStroke,TI_FAST, {Transparency = active and 0.55 or 0.68})
 		end
+		moveIndicator(true)
 		tween(settingsButtonIcon, TI_FAST,{ImageColor3 = settingsOpen and Theme.TextTitle or Theme.TextSub, Rotation = settingsOpen and 90 or 0})
 	end
 
@@ -5179,21 +5258,22 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 		function Tab:CreateColorPicker(ColorPickerSettings)
 			ColorPickerSettings=ColorPickerSettings or {}
-			local color = ColorPickerSettings.Color or Color3.fromRGB(255, 255,255)
+			local color = ColorPickerSettings.Color or Color3.fromRGB(255, 255, 255)
 
-			local wrapper = create("Frame", {
-				BackgroundTransparency=1,
-				AutomaticSize = Enum.AutomaticSize.Y,
-				Size = UDim2.new(1, 0, 0, 50),
+			local COLLAPSED_H = 50
+			local EXPANDED_H = 210
+			local SV_W, SV_H, SV_CY = 180, 110, 116
+			local HUE_CY = 188
+			local EXPO = TweenInfo.new(0.6, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out)
+			local EXPO_FAST = TweenInfo.new(0.45, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out)
+
+			local card = create("Frame", {
+				Size = UDim2.new(1, 0, 0, COLLAPSED_H),
+				ClipsDescendants = true,
 				LayoutOrder = nextOrder(),
 				Parent = page,
 			})
-			wrapper:SetAttribute("SearchName", ColorPickerSettings.Name or "")
-
-			local card = create("Frame", {
-				Size = UDim2.new(1, 0, 0, 50),
-				Parent = wrapper,
-			})
+			card:SetAttribute("SearchName", ColorPickerSettings.Name or "")
 			paint(card, "BackgroundColor3", "Card")
 			cardBase(card)
 			hoverable(card)
@@ -5203,15 +5283,15 @@ function RayfieldLibrary:CreateWindow(Settings)
 				local ic = makeIcon(card, ColorPickerSettings.Icon, 18, Theme.TextTitle, 0.04)
 				if ic then
 					ic.AnchorPoint = Vector2.new(0, 0.5)
-					ic.Position = UDim2.new(0, 16, 0.5, 0)
+					ic.Position = UDim2.new(0, 16, 0, 25)
 					textX = 44
 				end
 			end
 			local label = create("TextLabel",{
 				BackgroundTransparency = 1,
-				AnchorPoint = Vector2.new(0,0.5),
-				Position = UDim2.new(0, textX, 0.5, 0),
-				Size = UDim2.new(0.6, -textX, 0, 18),
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, textX, 0, 25),
+				Size = UDim2.new(0.5, -textX, 0, 18),
 				Font=FONT_MEDIUM,
 				TextSize = 16,
 				TextXAlignment = Enum.TextXAlignment.Left,
@@ -5219,166 +5299,391 @@ function RayfieldLibrary:CreateWindow(Settings)
 				Text = ColorPickerSettings.Name or "",
 				Parent = card,
 			})
-			paint(label, "TextColor3", "TextBody");
-
-			local swatch = create("Frame", {
-				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -15, 0.5, 0),
-				Size = UDim2.fromOffset(42, 26),
-				BackgroundColor3 = color,
-				Parent = card,
-			})
-			round(swatch, 9)
-			create("UIStroke", {Color = Color3.fromRGB(255,255, 255), Transparency = 0.8,Parent = swatch})
-
-			local panel = create("Frame", {
-				BackgroundTransparency = 1,
-				Position = UDim2.fromOffset(0, 56),
-				Size = UDim2.new(1, 0, 0, 0),
-				ClipsDescendants = true,
-				Parent=wrapper,
-			})
+			paint(label, "TextColor3", "TextBody")
 
 			local ColorPicker = {
 				Type = "ColorPicker",
 				Color = color,
 			}
 
-			local channels = {}
-			local channelDefs = {
-				{name = "R", get = function(c) return c.R end},
-				{name = "G", get = function(c) return c.G end},
-				{name = "B", get = function(c) return c.B end},
-			}
+			local h, s, v = color:ToHSV()
+			local open = false
+			local push, refresh
 
-			local function currentColor()
-				return Color3.fromRGB(channels[1].value,channels[2].value,channels[3].value)
+			local sv = create("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -16, 0, 25),
+				Size = UDim2.fromOffset(42, 26),
+				BackgroundColor3 = Color3.fromHSV(h, 1, 1),
+				Parent = card,
+			})
+			round(sv, 9)
+			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.85, Parent = sv})
+			local svGlow = softGlow(sv, color, 0.85, 34, 0)
+
+			local satOverlay = create("Frame", {
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				Size = UDim2.fromScale(1, 1),
+				Parent = sv,
+			})
+			round(satOverlay, 9)
+			create("UIGradient", {
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255)),
+				Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 0),
+					NumberSequenceKeypoint.new(1, 1),
+				}),
+				Parent = satOverlay,
+			})
+			local valOverlay = create("Frame", {
+				BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+				Size = UDim2.fromScale(1, 1),
+				Parent = sv,
+			})
+			round(valOverlay, 9)
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(0, 0, 0)),
+				Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 1),
+					NumberSequenceKeypoint.new(1, 0),
+				}),
+				Parent = valOverlay,
+			})
+			local svPoint = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Size = UDim2.fromOffset(16, 16),
+				BackgroundColor3 = color,
+				Visible = false,
+				Parent = sv,
+			})
+			roundFull(svPoint)
+			create("UIStroke", {Color = Color3.fromRGB(255, 255, 255), Thickness = 2, Parent = svPoint})
+
+			local display = create("Frame", {
+				BackgroundColor3 = color,
+				Size = UDim2.fromScale(1, 1),
+				Parent = sv,
+			})
+			round(display, 9)
+
+			local svHit = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				Parent = sv,
+			})
+
+			local hueBar = create("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -16, 0, 25),
+				Size = UDim2.fromOffset(0, 0),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				BackgroundTransparency = 1,
+				Parent = card,
+			})
+			roundFull(hueBar)
+			create("UIGradient", {
+				Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 0, 0)),
+					ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
+					ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
+					ColorSequenceKeypoint.new(0.50, Color3.fromRGB(0, 255, 255)),
+					ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0, 0, 255)),
+					ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 255)),
+					ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 0, 0)),
+				}),
+				Parent = hueBar,
+			})
+			local huePoint = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0, 0, 0.5, 0),
+				Size = UDim2.fromOffset(18, 18),
+				BackgroundColor3 = Color3.fromHSV(h, 1, 1),
+				Visible = false,
+				Parent = hueBar,
+			})
+			roundFull(huePoint)
+			create("UIStroke", {Color = Color3.fromRGB(255, 255, 255), Thickness = 2, Parent = huePoint})
+			local hueHit = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				Parent = hueBar,
+			})
+
+			local revealers = {}
+			local function addReveal(inst, prop, shown)
+				table.insert(revealers, {inst = inst, prop = prop, shown = shown})
+				inst[prop] = 1
+			end
+			local sliders = {}
+			local function addSlide(inst, x, openY, closedY)
+				table.insert(sliders, {inst = inst, x = x, openY = openY, closedY = closedY})
+				inst.Position = UDim2.new(0, x, 0, closedY)
 			end
 
-			local function pushColor(fire)
-				ColorPicker.Color = currentColor()
-				swatch.BackgroundColor3 = ColorPicker.Color
-				if fire then
-					runCallback(ColorPickerSettings.Callback, ColorPicker.Color)
-					saveConfiguration()
-				end
-			end
-
-			for i, def in ipairs(channelDefs) do
-				local rowY = (i - 1) * 34 + 4
-				local row = create("Frame", {
+			local function makeField(letter, boxX, y, boxW, initial)
+				local box = create("Frame", {
+					AnchorPoint = Vector2.new(0, 0.5),
+					Size = UDim2.fromOffset(boxW, 30),
 					BackgroundTransparency = 1,
-					Position = UDim2.fromOffset(4,rowY),
-					Size = UDim2.new(1, -8, 0, 28),
-					Parent = panel,
+					Parent = card,
 				})
-				local tag = create("TextLabel",{
+				paint(box, "BackgroundColor3", "CardInset")
+				round(box, 8)
+				local st = create("UIStroke", {Color = Theme.Stroke, Transparency = 1, Parent = box})
+				local inset = 10
+				if letter then
+					local lab = create("TextLabel", {
+						BackgroundTransparency = 1,
+						Position = UDim2.fromOffset(10, 0),
+						Size = UDim2.new(0, 12, 1, 0),
+						Font = FONT_MEDIUM,
+						TextSize = 12,
+						Text = letter,
+						TextTransparency = 1,
+						Parent = box,
+					})
+					paint(lab, "TextColor3", "TextMuted")
+					addReveal(lab, "TextTransparency", 0)
+					inset = 26
+				end
+				local tb = create("TextBox", {
 					BackgroundTransparency = 1,
-					Size = UDim2.fromOffset(20,28),
+					Position = UDim2.new(0, inset, 0, 0),
+					Size = UDim2.new(1, -inset - 6, 1, 0),
 					Font = FONT_MEDIUM,
 					TextSize = 14,
-					Text = def.name,
-					Parent = row,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+					ClearTextOnFocus = false,
+					Text = initial,
+					TextTransparency = 1,
+					Parent = box,
 				})
-				paint(tag,"TextColor3", "TextSub")
-				local track = create("Frame", {
-					AnchorPoint = Vector2.new(0, 0.5),
-					Position = UDim2.new(0, 30,0.5, 0),
-					Size = UDim2.new(1, -86,0, 14),
-					BackgroundColor3 = Color3.fromRGB(45, 45, 45),
-					BackgroundTransparency = 0.25,
-					Parent = row,
-				})
-				roundFull(track)
-				local fill=create("Frame", {
-					Size = UDim2.new(0.5, 0, 1,0),
-					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-					Parent = track,
-				})
-				roundFull(fill)
-				create("UIGradient",{
-					Color = ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Theme.AccentDark),
-						ColorSequenceKeypoint.new(1,Theme.AccentSoft),
-					}),
-					Parent = fill,
-				})
-				local valueLabel = create("TextLabel", {
+				paint(tb, "TextColor3", "TextBody")
+				addReveal(box, "BackgroundTransparency", 0)
+				addReveal(st, "Transparency", 0.85)
+				addReveal(tb, "TextTransparency", 0)
+				addSlide(box, boxX, y, y + 16)
+				tb.Focused:Connect(function()
+					tween(st, TI_FAST, {Color = Theme.Accent, Transparency = 0.25})
+				end)
+				tb.FocusLost:Connect(function()
+					tween(st, TI_FAST, {Color = Theme.Stroke, Transparency = 0.85})
+				end)
+				return tb
+			end
+
+			local hexTb = makeField(nil, 16, 70, 168, "#FFFFFF")
+			local rTb = makeField("R", 16, 112, 52, "255")
+			local gTb = makeField("G", 74, 112, 52, "255")
+			local bTb = makeField("B", 132, 112, 52, "255")
+
+			local preview = create("Frame", {
+				AnchorPoint = Vector2.new(0, 0.5),
+				Size = UDim2.fromOffset(168, 32),
+				BackgroundColor3 = color,
+				BackgroundTransparency = 1,
+				Parent = card,
+			})
+			round(preview, 10)
+			local previewStroke = create("UIStroke", {Color = Theme.Stroke, Transparency = 1, Parent = preview})
+			addReveal(preview, "BackgroundTransparency", 0)
+			addReveal(previewStroke, "Transparency", 0.85)
+			addSlide(preview, 16, 155, 171)
+
+			local presetColors = {
+				Color3.fromRGB(255, 255, 255),
+				Color3.fromRGB(255, 59, 48),
+				Color3.fromRGB(255, 159, 10),
+				Color3.fromRGB(255, 214, 10),
+				Color3.fromRGB(52, 199, 89),
+				Color3.fromRGB(10, 132, 255),
+				Color3.fromRGB(191, 90, 242),
+			}
+			for idx, presetColor in ipairs(presetColors) do
+				local dot = create("TextButton", {
+					Text = "",
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Size = UDim2.fromOffset(18, 18),
+					BackgroundColor3 = presetColor,
 					BackgroundTransparency = 1,
-					AnchorPoint = Vector2.new(1, 0),
-					Position = UDim2.new(1, 0,0,0),
-					Size = UDim2.fromOffset(40,28),
-					Font = FONT_MEDIUM,
-					TextSize = 13,
-					TextXAlignment = Enum.TextXAlignment.Right,
-					Text = "255",
-					Parent = row,
+					Parent = card,
 				})
-				paint(valueLabel, "TextColor3", "TextSub")
-
-				local channel = {value = math.floor(def.get(color) * 255 + 0.5)}
-				channels[i] = channel
-
-				local function render()
-					fill.Size = UDim2.new(math.max(channel.value / 255, 0.02), 0,1,0)
-					valueLabel.Text = tostring(channel.value)
-				end
-				channel.render = render
-				render()
-
-				local dragging = false
-				local function setFromX(x)
-					local alpha=math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
-					channel.value = math.floor(alpha * 255 + 0.5)
-					render()
-					pushColor(true)
-				end
-				track.InputBegan:Connect(function(input)
-					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-						dragging = true
-						setFromX(input.Position.X)
-					end
+				roundFull(dot)
+				local dotStroke = create("UIStroke", {Color = Theme.Stroke, Transparency = 1, Parent = dot})
+				addReveal(dot, "BackgroundTransparency", 0)
+				addReveal(dotStroke, "Transparency", 0.8)
+				addSlide(dot, 25 + (idx - 1) * 25, 188, 204)
+				dot.MouseEnter:Connect(function()
+					if open then tween(dot, TI_FAST, {Size = UDim2.fromOffset(22, 22)}) end
 				end)
-				connect(UserInputService.InputChanged, function(input)
-					if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-						setFromX(input.Position.X)
-					end
+				dot.MouseLeave:Connect(function()
+					tween(dot, TI_FAST, {Size = UDim2.fromOffset(18, 18)})
 				end)
-				connect(UserInputService.InputEnded,function(input)
-					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-						dragging = false
-					end
+				dot.MouseButton1Click:Connect(function()
+					if not open then return end
+					h, s, v = presetColor:ToHSV()
+					refresh()
+					push(true)
 				end)
 			end
 
-			local open = false
-			local clicker = create("TextButton",{
+			local clicker = create("TextButton", {
 				BackgroundTransparency = 1,
 				Text = "",
 				Size = UDim2.fromScale(1, 1),
 				Parent = card,
 			})
+
+			push = function(fire)
+				local c = Color3.fromHSV(h, s, v)
+				ColorPicker.Color = c
+				if fire then
+					runCallback(ColorPickerSettings.Callback, c)
+					saveConfiguration()
+				end
+			end
+
+			refresh = function()
+				local hueColor = Color3.fromHSV(h, 1, 1)
+				sv.BackgroundColor3 = hueColor
+				local c = Color3.fromHSV(h, s, v)
+				display.BackgroundColor3 = c
+				svPoint.BackgroundColor3 = c
+				svPoint.Position = UDim2.new(s, 0, 1 - v, 0)
+				huePoint.BackgroundColor3 = hueColor
+				huePoint.Position = UDim2.new(h, 0, 0.5, 0)
+				preview.BackgroundColor3 = c
+				svGlow.ImageColor3 = c
+				ColorPicker.Color = c
+				local r = math.floor(c.R * 255 + 0.5)
+				local g = math.floor(c.G * 255 + 0.5)
+				local b = math.floor(c.B * 255 + 0.5)
+				if not rTb:IsFocused() then rTb.Text = tostring(r) end
+				if not gTb:IsFocused() then gTb.Text = tostring(g) end
+				if not bTb:IsFocused() then bTb.Text = tostring(b) end
+				if not hexTb:IsFocused() then hexTb.Text = string.format("#%02X%02X%02X", r, g, b) end
+			end
+
+			local function setOpen(state)
+				if state == open then return end
+				open = state
+				if open then
+					tween(card, EXPO, {Size = UDim2.new(1, 0, 0, EXPANDED_H)})
+					tween(clicker, EXPO, {Size = UDim2.new(1, 0, 0, COLLAPSED_H)})
+					tween(sv, EXPO_FAST, {Size = UDim2.fromOffset(18, 15)})
+					task.delay(0.09, function()
+						if open then
+							tween(sv, EXPO, {Position = UDim2.new(1, -16, 0, SV_CY), Size = UDim2.fromOffset(SV_W, SV_H)})
+						end
+					end)
+					tween(display, EXPO, {BackgroundTransparency = 1})
+					svPoint.Visible = true
+					huePoint.Visible = true
+					tween(hueBar, EXPO, {Position = UDim2.new(1, -16, 0, HUE_CY), Size = UDim2.fromOffset(SV_W, 14), BackgroundTransparency = 0})
+					for _, r in ipairs(revealers) do tween(r.inst, EXPO, {[r.prop] = r.shown}) end
+					for _, sl in ipairs(sliders) do tween(sl.inst, EXPO, {Position = UDim2.new(0, sl.x, 0, sl.openY)}) end
+				else
+					tween(card, EXPO, {Size = UDim2.new(1, 0, 0, COLLAPSED_H)})
+					tween(clicker, EXPO, {Size = UDim2.fromScale(1, 1)})
+					tween(sv, EXPO, {Position = UDim2.new(1, -16, 0, 25), Size = UDim2.fromOffset(42, 26)})
+					tween(display, EXPO, {BackgroundTransparency = 0})
+					svPoint.Visible = false
+					huePoint.Visible = false
+					tween(hueBar, EXPO, {Position = UDim2.new(1, -16, 0, 25), Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1})
+					for _, r in ipairs(revealers) do tween(r.inst, EXPO, {[r.prop] = 1}) end
+					for _, sl in ipairs(sliders) do tween(sl.inst, EXPO, {Position = UDim2.new(0, sl.x, 0, sl.closedY)}) end
+				end
+			end
 			clicker.MouseButton1Click:Connect(function()
-				open = not open
-				tween(panel, TI_MED, {Size = UDim2.new(1,0, 0, open and (3 * 34 + 8) or 0)})
+				setOpen(not open)
 			end)
 
-			function ColorPicker:Set(newColor)
-				channels[1].value = math.floor(newColor.R * 255 + 0.5)
-				channels[2].value = math.floor(newColor.G * 255 + 0.5)
-				channels[3].value = math.floor(newColor.B * 255 + 0.5)
-				for _, channel in ipairs(channels) do
-					channel.render()
+			local svDragging = false
+			local function svFromInput(px, py)
+				local ax = math.clamp((px - sv.AbsolutePosition.X) / math.max(sv.AbsoluteSize.X, 1), 0, 1)
+				local ay = math.clamp((py - sv.AbsolutePosition.Y) / math.max(sv.AbsoluteSize.Y, 1), 0, 1)
+				s = ax
+				v = 1 - ay
+				refresh()
+				push(true)
+			end
+			svHit.InputBegan:Connect(function(input)
+				if not open then return end
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					svDragging = true
+					svFromInput(input.Position.X, input.Position.Y)
 				end
-				pushColor(true)
+			end)
+
+			local hueDragging = false
+			local function hueFromInput(px)
+				h = math.clamp((px - hueBar.AbsolutePosition.X) / math.max(hueBar.AbsoluteSize.X, 1), 0, 1)
+				refresh()
+				push(true)
+			end
+			hueHit.InputBegan:Connect(function(input)
+				if not open then return end
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					hueDragging = true
+					hueFromInput(input.Position.X)
+				end
+			end)
+
+			connect(UserInputService.InputChanged, function(input)
+				if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+					if svDragging then svFromInput(input.Position.X, input.Position.Y) end
+					if hueDragging then hueFromInput(input.Position.X) end
+				end
+			end)
+			connect(UserInputService.InputEnded, function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					svDragging = false
+					hueDragging = false
+				end
+			end)
+
+			hexTb.FocusLost:Connect(function()
+				local txt = string.gsub(hexTb.Text, "#", "")
+				local rr, gg, bb = string.match(txt, "^(%x%x)(%x%x)(%x%x)$")
+				if rr then
+					h, s, v = Color3.fromRGB(tonumber(rr, 16), tonumber(gg, 16), tonumber(bb, 16)):ToHSV()
+					refresh()
+					push(true)
+				else
+					refresh()
+				end
+			end)
+			local function commitRGB()
+				local base = Color3.fromHSV(h, s, v)
+				local rr = math.clamp(math.floor(tonumber(rTb.Text) or (base.R * 255 + 0.5)), 0, 255)
+				local gg = math.clamp(math.floor(tonumber(gTb.Text) or (base.G * 255 + 0.5)), 0, 255)
+				local bb = math.clamp(math.floor(tonumber(bTb.Text) or (base.B * 255 + 0.5)), 0, 255)
+				h, s, v = Color3.fromRGB(rr, gg, bb):ToHSV()
+				refresh()
+				push(true)
+			end
+			rTb.FocusLost:Connect(commitRGB)
+			gTb.FocusLost:Connect(commitRGB)
+			bTb.FocusLost:Connect(commitRGB)
+
+			function ColorPicker:Set(newColor)
+				h, s, v = newColor:ToHSV()
+				refresh()
 			end
 
 			if ColorPickerSettings.Flag then
 				ColorPicker.Flag = ColorPickerSettings.Flag
 				RayfieldLibrary.Flags[ColorPickerSettings.Flag] = ColorPicker
 			end
+
+			refresh()
 			return ColorPicker
 		end
+
 
 		function Tab:CreateRow()
 			local rowFrame = create("Frame",{
@@ -5461,31 +5766,15 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 		local pill = create("TextButton", {
 			AutomaticSize = Enum.AutomaticSize.X,
-			Size = UDim2.new(0, 0, 0, 44),
+			Size = UDim2.new(0, 0, 0, 36),
 			Text = "",
-			BackgroundTransparency = 0.35,
+			BackgroundTransparency = 1,
 			LayoutOrder = #tabs + 1,
-			Parent = tabBar,
+			ZIndex = 4,
+			Parent = dockButtons,
 		})
-		pill.BackgroundColor3 = Theme.CardInset
 		roundFull(pill)
-
-		create("UIGradient", {
-			Rotation = 90,
-			Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(200, 200,200)),
-			Parent = pill,
-		})
-
-		local pillStroke = create("UIStroke", {Color = Color3.fromRGB(255, 255, 255), Transparency = 0.62,Thickness = 1,ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = pill})
-		create("UIGradient", {
-			Rotation = 90,
-			Transparency = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 0),
-				NumberSequenceKeypoint.new(1, 0.75),
-			}),
-			Parent = pillStroke,
-		})
-		padAll(pill, 0, 22, 0, 22)
+		padAll(pill, 0, 18, 0, 18)
 		create("UIListLayout", {
 			FillDirection = Enum.FillDirection.Horizontal,
 			VerticalAlignment = Enum.VerticalAlignment.Center,
@@ -5495,18 +5784,22 @@ function RayfieldLibrary:CreateWindow(Settings)
 		})
 		local pillIcon = nil
 		if tabImage and tabImage ~= 0 and tabImage ~= "" then
-			pillIcon = makeIcon(pill, tabImage, 18, Theme.TextSub)
-			if pillIcon then pillIcon.LayoutOrder = 1 end
+			pillIcon = makeIcon(pill, tabImage, 16, Theme.TextSub)
+			if pillIcon then
+				pillIcon.LayoutOrder = 1
+				pillIcon.ZIndex = 5
+			end
 		end
 		local pillLabel = create("TextLabel",{
 			BackgroundTransparency = 1,
 			AutomaticSize = Enum.AutomaticSize.X,
 			Size = UDim2.new(0, 0, 1, 0),
 			Font = FONT_MEDIUM,
-			TextSize = 16,
+			TextSize = 15,
 			Text = tabName or "Tab",
 			TextColor3 = Theme.TextSub,
 			LayoutOrder=2,
+			ZIndex = 5,
 			Parent = pill,
 		})
 
@@ -5517,7 +5810,6 @@ function RayfieldLibrary:CreateWindow(Settings)
 			Pill = pill,
 			PillLabel = pillLabel,
 			PillIcon = pillIcon,
-			PillStroke = pillStroke,
 			API = Tab,
 		}
 		table.insert(tabs, tabEntry)
@@ -5525,12 +5817,23 @@ function RayfieldLibrary:CreateWindow(Settings)
 		pill.MouseButton1Click:Connect(function()
 			selectTab(tabEntry)
 		end)
+		pill:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			if currentTab == tabEntry and not settingsOpen then
+				moveIndicator(false)
+			end
+		end)
 
 		if #tabs == 1 then
 			currentTab = tabEntry
 			settingsOpen=false
 			styleTabPills()
 			pageWrapper.Visible = true
+			task.delay(0.1, function()
+				moveIndicator(false)
+			end)
+			task.delay(0.8, function()
+				moveIndicator(false)
+			end)
 		end
 
 		return Tab
@@ -5725,6 +6028,12 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	function Window:SetSubtitle(newSubtitle)
 		subtitleLabel.Text = newSubtitle or subtitleLabel.Text
+	end
+
+	function Window:SetTabStyle(style)
+		tabStyle = (tostring(style) == "Accent") and "Accent" or "White"
+		applyTabStyle()
+		styleTabPills()
 	end
 
 	function Window:Greet(GreetSettings)
