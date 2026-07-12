@@ -168,12 +168,12 @@ end
 
 local GLOW_IMAGE = 'rbxassetid://6014261993'
 
--- Layered, stretched bloom. Stacking a few fading copies at growing sizes turns
--- the shadow asset's hard slice border into a smooth radial falloff.
+-- True radial glow. A core layer plus a wider faint layer give a soft bloom
+-- with no hard edge (the shadow slice asset can only draw a rectangle).
+local GLOW_RADIAL = 'rbxassetid://8992230677'
 local GLOW_LAYERS = {
 	{scale = 1.0, fade = 0.0},
-	{scale = 2.0, fade = 0.35},
-	{scale = 3.4, fade = 0.6},
+	{scale = 1.9, fade = 0.5},
 }
 local function softGlow(parent, color, trans, spread, z)
 	local holder = create("Frame", {
@@ -190,7 +190,7 @@ local function softGlow(parent, color, trans, spread, z)
 		local px = spread * L.scale
 		local img = create("ImageLabel", {
 			Name = "L" .. i,
-			Image = GLOW_IMAGE,
+			Image = GLOW_RADIAL,
 			BackgroundTransparency = 1,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromScale(0.5, 0.5),
@@ -1550,8 +1550,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 		Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224)),
 		Parent = dockIndicator,
 	})
-	local dockGlow = softGlow(dockIndicator, tabAccent, 0.62, 20, 1)
-	dockGlow.Position = UDim2.new(0.5, 0, 0.5, 11)
+	local dockGlow = softGlow(dockIndicator, tabAccent, 0.4, 58, 1)
+	dockGlow.Position = UDim2.new(0.5, 0, 0.5, 8)
 	glowSet(dockGlow, 0)
 	local dockButtons = create("Frame", {
 		BackgroundTransparency = 1,
@@ -5358,7 +5358,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			})
 			round(sv, 9)
 			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.85, Parent = sv})
-			local svGlow = softGlow(sv, color, 0.72, 20, 0)
+			local svGlow = softGlow(sv, color, 0.4, 30, 0)
 
 			local satOverlay = create("Frame", {
 				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
