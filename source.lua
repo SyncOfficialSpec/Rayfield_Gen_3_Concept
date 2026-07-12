@@ -4196,21 +4196,26 @@ function RayfieldLibrary:CreateWindow(Settings)
 			})
 			local grad = create("UIGradient", {
 				Color = ColorSequence.new({
-					ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 120, 120)),
-					ColorSequenceKeypoint.new(0.42, Color3.fromRGB(120, 120, 120)),
+					ColorSequenceKeypoint.new(0, Color3.fromRGB(110, 110, 110)),
+					ColorSequenceKeypoint.new(0.3, Color3.fromRGB(110, 110, 110)),
+					ColorSequenceKeypoint.new(0.42, Color3.fromRGB(190, 190, 190)),
 					ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
-					ColorSequenceKeypoint.new(0.58, Color3.fromRGB(120, 120, 120)),
-					ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 120, 120)),
+					ColorSequenceKeypoint.new(0.58, Color3.fromRGB(190, 190, 190)),
+					ColorSequenceKeypoint.new(0.7, Color3.fromRGB(110, 110, 110)),
+					ColorSequenceKeypoint.new(1, Color3.fromRGB(110, 110, 110)),
 				}),
 				Offset = Vector2.new(-1, 0),
+				Rotation = ShimmerSettings.Rotation or 8,
 				Parent = lbl,
 			})
-			local speed = ShimmerSettings.Speed or 1.8
+			local speed = ShimmerSettings.Speed or 1.4
+			local rest = ShimmerSettings.Rest or 0.35
 			task.spawn(function()
 				while grad.Parent do
 					grad.Offset = Vector2.new(-1, 0)
-					local t = tween(grad, TweenInfo.new(speed, Enum.EasingStyle.Linear), {Offset = Vector2.new(1, 0)})
+					local t = tween(grad, TweenInfo.new(speed, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Offset = Vector2.new(1, 0)})
 					t.Completed:Wait()
+					task.wait(rest)
 				end
 			end)
 
@@ -5708,14 +5713,21 @@ function RayfieldLibrary:CreateWindow(Settings)
 		local texts = GreetSettings.Texts or {"Hello", "bonjour", "\227\130\132\227\129\130", "Guten tag", "hola", "ciao"}
 		local hold = GreetSettings.Hold or 0.34
 
-		local overlay = create("Frame", {
+		local clipper = create("CanvasGroup", {
 			Name = "Greeting",
+			BackgroundTransparency = 1,
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 900,
+			Parent = window,
+		})
+		round(clipper, 24)
+		local overlay = create("Frame", {
 			AnchorPoint = Vector2.new(0.5, 0),
 			Position = UDim2.new(0.5, 0, 0, -40),
 			Size = UDim2.new(1.6, 0, 1, 140),
 			BackgroundColor3 = Color3.fromRGB(250, 250, 250),
 			ZIndex = 900,
-			Parent = window,
+			Parent = clipper,
 		})
 		round(overlay, 90)
 		local word = create("TextLabel", {
@@ -5745,7 +5757,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 				Position = UDim2.new(0.5, 0, -1, -220),
 			})
 			task.delay(0.7, function()
-				overlay:Destroy()
+				clipper:Destroy()
 			end)
 		end)
 	end

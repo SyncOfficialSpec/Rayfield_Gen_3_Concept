@@ -46,11 +46,23 @@ local Shimmer = Test:CreateShimmerLabel({
 	TextSize = 22,
 })
 
+local ShimmerLines = {
+	"Rayfield Gen 3",
+	"Smooth as butter",
+	"Concept build",
+	"Shiny new elements",
+	"Still shimmering",
+	"Text Shimmer",
+}
+local ShimmerIndex = 0
+
 Test:CreateButton({
 	Name = "Rename shimmer",
+	Description = "Cycles a new line on every tap.",
 	Callback = function()
-		Shimmer:Set("Rayfield Gen 3")
-		print("Shimmer renamed")
+		ShimmerIndex = ShimmerIndex % #ShimmerLines + 1
+		Shimmer:Set(ShimmerLines[ShimmerIndex])
+		print("Shimmer text:", ShimmerLines[ShimmerIndex])
 	end,
 })
 
