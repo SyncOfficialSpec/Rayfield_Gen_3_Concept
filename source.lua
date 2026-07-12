@@ -740,7 +740,8 @@ function RayfieldLibrary:Notify(data)
 		LayoutOrder = notifyOrder,
 		Parent = notifyStack,
 	})
-	local glow = softGlow(holder, Color3.fromRGB(0, 0,0), 1, 18, 0)
+	local glow = softGlow(holder, Color3.fromRGB(0, 0,0), 0.72, 18, 0)
+	glowSet(glow, 0)
 
 	local card = create("CanvasGroup", {
 		Size = UDim2.fromScale(1, 1),
@@ -811,7 +812,7 @@ function RayfieldLibrary:Notify(data)
 
 		tween(card, FADE, {GroupTransparency = 1})
 		tween(cardStroke, FADE, {Transparency = 1})
-		tween(glow, FADE,{ImageTransparency = 1})
+		glowSet(glow, 0, FADE)
 		task.wait(0.2)
 		tween(holder, TweenInfo.new(0.5, Enum.EasingStyle.Exponential), {Size = UDim2.new(1, -90, 0, 0)})
 		task.wait(0.55)
@@ -829,7 +830,7 @@ function RayfieldLibrary:Notify(data)
 		tween(card, FADE, {GroupTransparency = 0})
 		tween(cardStroke, FADE, {Transparency = 0.94})
 		task.wait(0.05)
-		tween(glow, TweenInfo.new(0.3, Enum.EasingStyle.Exponential), {ImageTransparency = 0.72});
+		glowSet(glow, 1, TweenInfo.new(0.3, Enum.EasingStyle.Exponential));
 
 		local duration = data.Duration or math.min(math.max(#bodyText * 0.1 + 2.5, 3), 10)
 		local elapsed=0
@@ -1188,6 +1189,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 				elseif element.Type == "ColorPicker" then
 					local c = element.Color
 					out[flag] = {R = math.floor(c.R * 255 + 0.5), G = math.floor(c.G * 255 + 0.5), B = math.floor(c.B * 255 + 0.5)}
+				elseif element.Type == "GradientPicker" then
+					out[flag] = element:Serialize()
 				end
 			end
 			writef(configFolder .. "/" .. configFile .. ".json", HttpService:JSONEncode(out))
@@ -5742,6 +5745,455 @@ function RayfieldLibrary:CreateWindow(Settings)
 			refresh()
 			return ColorPicker
 		end
+
+		function Tab:CreateGradientPicker(GradientSettings)
+			GradientSettings = GradientSettings or {}
+			local COLLAPSED_H = 50
+			local EXPANDED_H = 256
+			local SV_W, SV_H, SV_CY = 180, 76, 176
+			local HUE_CY = 228
+			local EXPO = TweenInfo.new(0.6, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out)
+			local EXPO_FAST = TweenInfo.new(0.45, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out)
+			local MAX_STOPS = 12
+
+			local stops = {}
+			local function addStopRaw(pos, color)
+				local hh, ss, vv = color:ToHSV()
+				table.insert(stops, {Pos = math.clamp(pos, 0, 1), H = hh, S = ss, V = vv})
+			end
+			local function loadFromSequence(seq)
+				stops = {}
+				for _, kp in ipairs(seq.Keypoints) do
+					addStopRaw(kp.Time, kp.Value)
+				end
+			end
+			if typeof(GradientSettings.Color) == "ColorSequence" then
+				loadFromSequence(GradientSettings.Color)
+			elseif type(GradientSettings.Colors) == "table" and #GradientSettings.Colors >= 2 then
+				local n = #GradientSettings.Colors
+				for i, c in ipairs(GradientSettings.Colors) do
+					if typeof(c) == "Color3" then addStopRaw((i - 1) / (n - 1), c) end
+				end
+			end
+			if #stops < 2 then
+				stops = {}
+				addStopRaw(0, Color3.fromRGB(74, 178, 124))
+				addStopRaw(1, Color3.fromRGB(70, 130, 220))
+			end
+
+			local card = create("Frame", {
+				Size = UDim2.new(1, 0, 0, COLLAPSED_H),
+				ClipsDescendants = true,
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", GradientSettings.Name or "")
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+			hoverable(card)
+
+			local textX = 17
+			if GradientSettings.Icon then
+				local ic = makeIcon(card, GradientSettings.Icon, 18, Theme.TextTitle, 0.04)
+				if ic then
+					ic.AnchorPoint = Vector2.new(0, 0.5)
+					ic.Position = UDim2.new(0, 16, 0, 25)
+					textX = 44
+				end
+			end
+			local label = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, textX, 0, 25),
+				Size = UDim2.new(0.5, -textX, 0, 18),
+				Font = FONT_MEDIUM,
+				TextSize = 16,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Text = GradientSettings.Name or "",
+				Parent = card,
+			})
+			paint(label, "TextColor3", "TextBody")
+
+			local GradientPicker = {Type = "GradientPicker"}
+			local selIdx = 1
+			local open = false
+			local push, refresh, refreshSelection
+			local handleFrames = {}
+			local railDragIdx = nil
+
+			local function buildSequence()
+				local sorted = {}
+				for _, st in ipairs(stops) do table.insert(sorted, st) end
+				table.sort(sorted, function(a, b) return a.Pos < b.Pos end)
+				local kps = {}
+				local lastT = -1
+				for _, st in ipairs(sorted) do
+					local t = math.clamp(st.Pos, 0, 1)
+					if t <= lastT then t = math.min(1, lastT + 0.0012) end
+					lastT = t
+					table.insert(kps, ColorSequenceKeypoint.new(t, Color3.fromHSV(st.H, st.S, st.V)))
+				end
+				if kps[1].Time > 0 then
+					table.insert(kps, 1, ColorSequenceKeypoint.new(0, kps[1].Value))
+				end
+				if kps[#kps].Time < 1 then
+					table.insert(kps, ColorSequenceKeypoint.new(1, kps[#kps].Value))
+				end
+				local ok, seq = pcall(ColorSequence.new, kps)
+				if ok then return seq end
+				return ColorSequence.new(kps[1].Value, kps[#kps].Value)
+			end
+
+			-- collapsed swatch that morphs into the full preview bar
+			local previewBar = create("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -16, 0, 25),
+				Size = UDim2.fromOffset(46, 26),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				Parent = card,
+			})
+			round(previewBar, 9)
+			local previewGrad = create("UIGradient", {Parent = previewBar})
+			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.85, Parent = previewBar})
+
+			-- stops rail
+			local rail = create("TextButton", {
+				Text = "",
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -16, 0, 116),
+				Size = UDim2.new(1, -32, 0, 24),
+				AutoButtonColor = false,
+				Parent = card,
+			})
+			paint(rail, "BackgroundColor3", "CardInset")
+			round(rail, 8)
+			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.9, Parent = rail})
+
+			-- SV square (edits the selected stop)
+			local sv = create("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -16, 0, SV_CY),
+				Size = UDim2.fromOffset(SV_W, SV_H),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				Parent = card,
+			})
+			round(sv, 10)
+			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.85, Parent = sv})
+			local satOverlay = create("Frame", {BackgroundColor3 = Color3.fromRGB(255, 255, 255), Size = UDim2.fromScale(1, 1), Parent = sv})
+			round(satOverlay, 10)
+			create("UIGradient", {
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255)),
+				Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1)}),
+				Parent = satOverlay,
+			})
+			local valOverlay = create("Frame", {BackgroundColor3 = Color3.fromRGB(0, 0, 0), Size = UDim2.fromScale(1, 1), Parent = sv})
+			round(valOverlay, 10)
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(0, 0, 0)),
+				Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0)}),
+				Parent = valOverlay,
+			})
+			local svPoint = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Size = UDim2.fromOffset(14, 14),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				Parent = sv,
+			})
+			roundFull(svPoint)
+			create("UIStroke", {Color = Color3.fromRGB(255, 255, 255), Thickness = 2, Parent = svPoint})
+			local svHit = create("TextButton", {BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), Parent = sv})
+
+			-- hue bar
+			local hueBar = create("Frame", {
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -16, 0, HUE_CY),
+				Size = UDim2.fromOffset(SV_W, 14),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				Parent = card,
+			})
+			roundFull(hueBar)
+			create("UIGradient", {
+				Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 0, 0)),
+					ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
+					ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
+					ColorSequenceKeypoint.new(0.50, Color3.fromRGB(0, 255, 255)),
+					ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0, 0, 255)),
+					ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 255)),
+					ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 0, 0)),
+				}),
+				Parent = hueBar,
+			})
+			local huePoint = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0, 0, 0.5, 0),
+				Size = UDim2.fromOffset(16, 16),
+				BackgroundColor3 = Color3.fromRGB(255, 0, 0),
+				Parent = hueBar,
+			})
+			roundFull(huePoint)
+			create("UIStroke", {Color = Color3.fromRGB(255, 255, 255), Thickness = 2, Parent = huePoint})
+			local hueHit = create("TextButton", {BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), Parent = hueBar})
+
+			-- left column buttons
+			local function makeBtn(text, iconPath, y)
+				local btn = create("TextButton", {
+					Text = "",
+					AnchorPoint = Vector2.new(0, 0),
+					Position = UDim2.new(0, 16, 0, y),
+					Size = UDim2.fromOffset(150, 34),
+					AutoButtonColor = false,
+					Parent = card,
+				})
+				paint(btn, "BackgroundColor3", "CardInset")
+				round(btn, 9)
+				local row = create("Frame", {
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					AutomaticSize = Enum.AutomaticSize.X,
+					Size = UDim2.new(0, 0, 1, 0),
+					Parent = btn,
+				})
+				create("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 7), Parent = row})
+				local ic = makeIcon(row, iconPath, 15, Theme.TextBody, 0)
+				if ic then ic.LayoutOrder = 1 end
+				local lbl = create("TextLabel", {BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.new(0, 0, 1, 0), Font = FONT_MEDIUM, TextSize = 13, Text = text, LayoutOrder = 2, Parent = row})
+				paint(lbl, "TextColor3", "TextBody")
+				btn.MouseEnter:Connect(function() if open then tween(btn, TI_FAST, {BackgroundColor3 = Theme.CardSelected}) end end)
+				btn.MouseLeave:Connect(function() tween(btn, TI_FAST, {BackgroundColor3 = Theme.CardInset}) end)
+				return btn
+			end
+			local addBtn = makeBtn("Add stop", "plus", 138)
+			local removeBtn = makeBtn("Remove stop", "trash-2", 178)
+
+			local clicker = create("TextButton", {BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), Parent = card})
+
+			local function colorAt(pos)
+				local sorted = {}
+				for _, st in ipairs(stops) do table.insert(sorted, st) end
+				table.sort(sorted, function(a, b) return a.Pos < b.Pos end)
+				local lo, hi = sorted[1], sorted[#sorted]
+				for i = 1, #sorted - 1 do
+					if pos >= sorted[i].Pos and pos <= sorted[i + 1].Pos then
+						lo, hi = sorted[i], sorted[i + 1]
+						break
+					end
+				end
+				local t = (hi.Pos == lo.Pos) and 0 or (pos - lo.Pos) / (hi.Pos - lo.Pos)
+				local c1 = Color3.fromHSV(lo.H, lo.S, lo.V)
+				local c2 = Color3.fromHSV(hi.H, hi.S, hi.V)
+				return c1:Lerp(c2, math.clamp(t, 0, 1))
+			end
+
+			refreshSelection = function()
+				for i, hd in ipairs(handleFrames) do
+					local isSel = i == selIdx
+					tween(hd, TI_FAST, {Size = UDim2.fromOffset(isSel and 21 or 16, isSel and 21 or 16)})
+					local st = hd:FindFirstChildOfClass("UIStroke")
+					if st then
+						tween(st, TI_FAST, {Color = isSel and Theme.Accent or Color3.fromRGB(255, 255, 255), Thickness = isSel and 3 or 2.5})
+					end
+				end
+			end
+
+			refresh = function()
+				previewGrad.Color = buildSequence()
+				local st = stops[selIdx]
+				local hueColor = Color3.fromHSV(st.H, 1, 1)
+				sv.BackgroundColor3 = hueColor
+				svPoint.BackgroundColor3 = Color3.fromHSV(st.H, st.S, st.V)
+				svPoint.Position = UDim2.new(st.S, 0, 1 - st.V, 0)
+				huePoint.BackgroundColor3 = hueColor
+				huePoint.Position = UDim2.new(st.H, 0, 0.5, 0)
+				for i, hd in ipairs(handleFrames) do
+					if stops[i] then
+						hd.BackgroundColor3 = Color3.fromHSV(stops[i].H, stops[i].S, stops[i].V)
+						hd.Position = UDim2.new(stops[i].Pos, 0, 0.5, 0)
+					end
+				end
+				GradientPicker.Value = buildSequence()
+			end
+
+			push = function(fire)
+				GradientPicker.Value = buildSequence()
+				if fire then
+					runCallback(GradientSettings.Callback, GradientPicker.Value)
+					saveConfiguration()
+				end
+			end
+
+			local function makeHandle(i)
+				local hd = create("TextButton", {
+					Text = "",
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(stops[i].Pos, 0, 0.5, 0),
+					Size = UDim2.fromOffset(16, 16),
+					BackgroundColor3 = Color3.fromHSV(stops[i].H, stops[i].S, stops[i].V),
+					AutoButtonColor = false,
+					ZIndex = 3,
+					Parent = rail,
+				})
+				round(hd, 5)
+				create("UIStroke", {Color = Color3.fromRGB(255, 255, 255), Thickness = 2.5, Parent = hd})
+				hd.InputBegan:Connect(function(input)
+					if not open then return end
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						selIdx = i
+						railDragIdx = i
+						refreshSelection()
+						refresh()
+					end
+				end)
+				return hd
+			end
+			local function rebuildHandles()
+				for _, hd in ipairs(handleFrames) do hd:Destroy() end
+				handleFrames = {}
+				for i = 1, #stops do
+					handleFrames[i] = makeHandle(i)
+				end
+				refreshSelection()
+			end
+			rebuildHandles()
+
+			rail.MouseButton1Click:Connect(function()
+				if not open then return end
+				if #stops >= MAX_STOPS then return end
+				local rel = math.clamp((UserInputService:GetMouseLocation().X - rail.AbsolutePosition.X) / math.max(rail.AbsoluteSize.X, 1), 0, 1)
+				addStopRaw(rel, colorAt(rel))
+				selIdx = #stops
+				rebuildHandles()
+				refresh()
+				push(true)
+			end)
+
+			addBtn.MouseButton1Click:Connect(function()
+				if not open or #stops >= MAX_STOPS then return end
+				addStopRaw(0.5, colorAt(0.5))
+				selIdx = #stops
+				rebuildHandles()
+				refresh()
+				push(true)
+			end)
+			removeBtn.MouseButton1Click:Connect(function()
+				if not open or #stops <= 2 then return end
+				table.remove(stops, selIdx)
+				selIdx = math.max(1, selIdx - 1)
+				rebuildHandles()
+				refresh()
+				push(true)
+			end)
+
+			local function setOpen(state)
+				if state == open then return end
+				open = state
+				if open then
+					tween(card, EXPO, {Size = UDim2.new(1, 0, 0, EXPANDED_H)})
+					tween(clicker, EXPO, {Size = UDim2.new(1, 0, 0, COLLAPSED_H)})
+					tween(previewBar, EXPO, {Position = UDim2.new(1, -16, 0, 77), Size = UDim2.new(1, -32, 0, 30)})
+				else
+					tween(card, EXPO, {Size = UDim2.new(1, 0, 0, COLLAPSED_H)})
+					tween(clicker, EXPO, {Size = UDim2.fromScale(1, 1)})
+					tween(previewBar, EXPO, {Position = UDim2.new(1, -16, 0, 25), Size = UDim2.fromOffset(46, 26)})
+				end
+			end
+			clicker.MouseButton1Click:Connect(function()
+				setOpen(not open)
+			end)
+
+			local svDragging = false
+			local function svFromInput(px, py)
+				local ax = math.clamp((px - sv.AbsolutePosition.X) / math.max(sv.AbsoluteSize.X, 1), 0, 1)
+				local ay = math.clamp((py - sv.AbsolutePosition.Y) / math.max(sv.AbsoluteSize.Y, 1), 0, 1)
+				stops[selIdx].S = ax
+				stops[selIdx].V = 1 - ay
+				refresh()
+				push(true)
+			end
+			svHit.InputBegan:Connect(function(input)
+				if not open then return end
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					svDragging = true
+					svFromInput(input.Position.X, input.Position.Y)
+				end
+			end)
+			local hueDragging = false
+			local function hueFromInput(px)
+				stops[selIdx].H = math.clamp((px - hueBar.AbsolutePosition.X) / math.max(hueBar.AbsoluteSize.X, 1), 0, 1)
+				refresh()
+				push(true)
+			end
+			hueHit.InputBegan:Connect(function(input)
+				if not open then return end
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					hueDragging = true
+					hueFromInput(input.Position.X)
+				end
+			end)
+
+			connect(UserInputService.InputChanged, function(input)
+				if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+					if svDragging then svFromInput(input.Position.X, input.Position.Y) end
+					if hueDragging then hueFromInput(input.Position.X) end
+					if railDragIdx and stops[railDragIdx] then
+						stops[railDragIdx].Pos = math.clamp((input.Position.X - rail.AbsolutePosition.X) / math.max(rail.AbsoluteSize.X, 1), 0, 1)
+						refresh()
+						push(true)
+					end
+				end
+			end)
+			connect(UserInputService.InputEnded, function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					svDragging = false
+					hueDragging = false
+					railDragIdx = nil
+				end
+			end)
+
+			function GradientPicker:Set(data)
+				if typeof(data) == "ColorSequence" then
+					loadFromSequence(data)
+				elseif type(data) == "table" then
+					stops = {}
+					for _, e in ipairs(data) do
+						if e.Color and typeof(e.Color) == "Color3" then
+							addStopRaw(e.Pos or e.T or 0, e.Color)
+						elseif e.R then
+							addStopRaw(e.T or e.Pos or 0, Color3.fromRGB(e.R, e.G or 0, e.B or 0))
+						end
+					end
+				end
+				if #stops < 2 then
+					stops = {}
+					addStopRaw(0, Color3.fromRGB(74, 178, 124))
+					addStopRaw(1, Color3.fromRGB(70, 130, 220))
+				end
+				selIdx = math.clamp(selIdx, 1, #stops)
+				rebuildHandles()
+				refresh()
+			end
+			function GradientPicker:Serialize()
+				local out = {}
+				for _, st in ipairs(stops) do
+					local c = Color3.fromHSV(st.H, st.S, st.V)
+					table.insert(out, {T = st.Pos, R = math.floor(c.R * 255 + 0.5), G = math.floor(c.G * 255 + 0.5), B = math.floor(c.B * 255 + 0.5)})
+				end
+				return out
+			end
+
+			if GradientSettings.Flag then
+				GradientPicker.Flag = GradientSettings.Flag
+				RayfieldLibrary.Flags[GradientSettings.Flag] = GradientPicker
+			end
+
+			refresh()
+			return GradientPicker
+		end
+
+
 
 
 		function Tab:CreateRow()
