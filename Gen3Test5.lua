@@ -5,7 +5,7 @@ local Window = Rayfield:CreateWindow({
 	Subtitle = "Tab dock and color picker",
 	Icon = "flask-conical",
 	Badge = {Text = "test", Icon = "bug"},
-	TabStyle = "White",
+	TabStyle = "Accent",
 	ToggleUIKeybind = "K",
 	ConfigurationSaving = {
 		Enabled = true,
@@ -35,12 +35,13 @@ Home:CreateLabel("Switch between the tabs up top and feel the slide.", "mouse-po
 Home:CreateSection("New color picker")
 
 Home:CreateColorPicker({
-	Name = "Accent color",
+	Name = "Tab accent color",
 	Icon = "palette",
-	Color = Color3.fromRGB(70, 168, 120),
+	Color = Color3.fromRGB(74, 178, 124),
 	Flag = "AccentColor",
 	Callback = function(color)
-		print(("Color: %d, %d, %d"):format(color.R * 255, color.G * 255, color.B * 255))
+		Window:SetTabAccent(color)
+		print(("Tab accent: %d, %d, %d"):format(color.R * 255, color.G * 255, color.B * 255))
 	end,
 })
 

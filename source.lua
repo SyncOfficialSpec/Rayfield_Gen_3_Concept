@@ -1478,6 +1478,14 @@ function RayfieldLibrary:CreateWindow(Settings)
 	})
 
 	local tabStyle = (Settings.TabStyle == "Accent") and "Accent" or "White"
+	local tabAccent = Settings.TabAccent or Color3.fromRGB(74, 178, 124)
+	local function shade(c, f)
+		if f >= 0 then
+			return Color3.new(c.R + (1 - c.R) * f, c.G + (1 - c.G) * f, c.B + (1 - c.B) * f)
+		end
+		f = 1 + f
+		return Color3.new(c.R * f, c.G * f, c.B * f)
+	end
 	local dockTrack = create("Frame", {
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 2, 0.5, 0),
@@ -1498,7 +1506,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 	})
 	roundFull(dockIndicator)
 	local dockIndicatorGrad = create("UIGradient", {
-		Rotation = 90,
+		Rotation = 105,
 		Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224)),
 		Parent = dockIndicator,
 	})
@@ -1763,7 +1771,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	local function applyTabStyle()
 		if tabStyle == "Accent" then
-			dockIndicatorGrad.Color = ColorSequence.new(Color3.fromRGB(96, 200, 148), Color3.fromRGB(52, 124, 88))
+			dockIndicatorGrad.Color = ColorSequence.new(shade(tabAccent, 0.24), shade(tabAccent, -0.32))
+			dockGlow.ImageColor3 = tabAccent
 		else
 			dockIndicatorGrad.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224))
 		end
@@ -6034,6 +6043,13 @@ function RayfieldLibrary:CreateWindow(Settings)
 		tabStyle = (tostring(style) == "Accent") and "Accent" or "White"
 		applyTabStyle()
 		styleTabPills()
+	end
+
+	function Window:SetTabAccent(color)
+		if typeof(color) == "Color3" then
+			tabAccent = color
+			applyTabStyle()
+		end
 	end
 
 	function Window:Greet(GreetSettings)
