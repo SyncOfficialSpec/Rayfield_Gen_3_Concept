@@ -168,21 +168,61 @@ end
 
 local GLOW_IMAGE = 'rbxassetid://6014261993'
 
-local function softGlow(parent, color, trans, spread,z)
-	return create("ImageLabel", {
-		Name = 'Glow',
-		Image = GLOW_IMAGE,
+-- Layered, stretched bloom. Stacking a few fading copies at growing sizes turns
+-- the shadow asset's hard slice border into a smooth radial falloff.
+local GLOW_LAYERS = {
+	{scale = 1.0, fade = 0.0},
+	{scale = 2.0, fade = 0.35},
+	{scale = 3.4, fade = 0.6},
+}
+local function softGlow(parent, color, trans, spread, z)
+	local holder = create("Frame", {
+		Name = "Glow",
 		BackgroundTransparency = 1,
-		AnchorPoint = Vector2.new(0.5,0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.new(1, spread, 1, spread),
-		ImageColor3 = color,
-		ImageTransparency = trans,
-		ScaleType = Enum.ScaleType.Slice,
-		SliceCenter = Rect.new(49,49, 450,450),
+		Size = UDim2.new(1, 0, 1, 0),
 		ZIndex = z or 0,
 		Parent = parent,
 	})
+	for i, L in ipairs(GLOW_LAYERS) do
+		local base = math.clamp(trans + (1 - trans) * L.fade, 0, 1)
+		local px = spread * L.scale
+		local img = create("ImageLabel", {
+			Name = "L" .. i,
+			Image = GLOW_IMAGE,
+			BackgroundTransparency = 1,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.new(1, px, 1, px),
+			ImageColor3 = color,
+			ImageTransparency = base,
+			ScaleType = Enum.ScaleType.Stretch,
+			ZIndex = z or 0,
+			Parent = holder,
+		})
+		img:SetAttribute("BaseTransparency", base)
+	end
+	return holder
+end
+local function glowColor(holder, color)
+	for _, ch in ipairs(holder:GetChildren()) do
+		if ch:IsA("ImageLabel") then ch.ImageColor3 = color end
+	end
+end
+-- amount: 0 hidden, 1 fully shown (at each layer's base transparency)
+local function glowSet(holder, amount, ti)
+	for _, ch in ipairs(holder:GetChildren()) do
+		if ch:IsA("ImageLabel") then
+			local base = ch:GetAttribute("BaseTransparency") or 0
+			local target = base + (1 - base) * (1 - amount)
+			if ti then
+				TweenService:Create(ch, ti, {ImageTransparency = target}):Play()
+			else
+				ch.ImageTransparency = target
+			end
+		end
+	end
 end
 
 local FONT_REGULAR = Enum.Font.BuilderSans
@@ -1510,19 +1550,9 @@ function RayfieldLibrary:CreateWindow(Settings)
 		Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224)),
 		Parent = dockIndicator,
 	})
-	local dockGlow = create("ImageLabel", {
-		BackgroundTransparency = 1,
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(0.5, 0, 0.5, 7),
-		Size = UDim2.new(1, 26, 1, 20),
-		Image = GLOW_IMAGE,
-		ImageColor3 = Theme.Accent,
-		ImageTransparency = 1,
-		ScaleType = Enum.ScaleType.Slice,
-		SliceCenter = Rect.new(49, 49, 450, 450),
-		ZIndex = 1,
-		Parent = dockIndicator,
-	})
+	local dockGlow = softGlow(dockIndicator, tabAccent, 0.62, 20, 1)
+	dockGlow.Position = UDim2.new(0.5, 0, 0.5, 11)
+	glowSet(dockGlow, 0)
 	local dockButtons = create("Frame", {
 		BackgroundTransparency = 1,
 		AutomaticSize = Enum.AutomaticSize.X,
@@ -1750,29 +1780,29 @@ function RayfieldLibrary:CreateWindow(Settings)
 		local target = (not settingsOpen) and currentTab or nil
 		if not target or not target.Pill then
 			tween(dockIndicator, TI_FAST, {BackgroundTransparency = 1})
-			tween(dockGlow, TI_FAST, {ImageTransparency = 1})
+			glowSet(dockGlow, 0, TI_FAST)
 			return
 		end
 		local btn = target.Pill
 		local x = btn.AbsolutePosition.X - dockTrack.AbsolutePosition.X
 		local goalPos = UDim2.fromOffset(x, 4)
 		local goalSize = UDim2.fromOffset(btn.AbsoluteSize.X, 36)
-		local glowGoal = tabStyle == "Accent" and 0.45 or 1
+		local glowAmount = tabStyle == "Accent" and 1 or 0
 		if animate then
 			tween(dockIndicator, TI_DOCK, {Position = goalPos, Size = goalSize, BackgroundTransparency = 0})
-			tween(dockGlow, TI_DOCK, {ImageTransparency = glowGoal})
+			glowSet(dockGlow, glowAmount, TI_DOCK)
 		else
 			dockIndicator.Position = goalPos
 			dockIndicator.Size = goalSize
 			dockIndicator.BackgroundTransparency = 0
-			dockGlow.ImageTransparency = glowGoal
+			glowSet(dockGlow, glowAmount)
 		end
 	end
 
 	local function applyTabStyle()
 		if tabStyle == "Accent" then
 			dockIndicatorGrad.Color = ColorSequence.new(shade(tabAccent, 0.24), shade(tabAccent, -0.32))
-			dockGlow.ImageColor3 = tabAccent
+			glowColor(dockGlow, tabAccent)
 		else
 			dockIndicatorGrad.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224))
 		end
@@ -5328,7 +5358,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			})
 			round(sv, 9)
 			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.85, Parent = sv})
-			local svGlow = softGlow(sv, color, 0.85, 34, 0)
+			local svGlow = softGlow(sv, color, 0.72, 20, 0)
 
 			local satOverlay = create("Frame", {
 				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
@@ -5566,7 +5596,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 				huePoint.BackgroundColor3 = hueColor
 				huePoint.Position = UDim2.new(h, 0, 0.5, 0)
 				preview.BackgroundColor3 = c
-				svGlow.ImageColor3 = c
+				glowColor(svGlow, c)
 				ColorPicker.Color = c
 				local r = math.floor(c.R * 255 + 0.5)
 				local g = math.floor(c.G * 255 + 0.5)
