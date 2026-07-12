@@ -4176,6 +4176,305 @@ function RayfieldLibrary:CreateWindow(Settings)
 			return Tag
 		end
 
+		function Tab:CreateShimmerLabel(ShimmerSettings)
+			ShimmerSettings = ShimmerSettings or {}
+			local holder = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, ShimmerSettings.Height or 34),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			holder:SetAttribute("SearchName", ShimmerSettings.Text or "")
+			local lbl = create("TextLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				Font = FONT_MEDIUM,
+				TextSize = ShimmerSettings.TextSize or 20,
+				TextColor3 = Color3.fromRGB(255, 255, 255),
+				Text = ShimmerSettings.Text or "Shimmer",
+				Parent = holder,
+			})
+			local grad = create("UIGradient", {
+				Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 120, 120)),
+					ColorSequenceKeypoint.new(0.42, Color3.fromRGB(120, 120, 120)),
+					ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+					ColorSequenceKeypoint.new(0.58, Color3.fromRGB(120, 120, 120)),
+					ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 120, 120)),
+				}),
+				Offset = Vector2.new(-1, 0),
+				Parent = lbl,
+			})
+			local speed = ShimmerSettings.Speed or 1.8
+			task.spawn(function()
+				while grad.Parent do
+					grad.Offset = Vector2.new(-1, 0)
+					local t = tween(grad, TweenInfo.new(speed, Enum.EasingStyle.Linear), {Offset = Vector2.new(1, 0)})
+					t.Completed:Wait()
+				end
+			end)
+
+			local Shimmer = {}
+			function Shimmer:Set(newText)
+				lbl.Text = newText or lbl.Text
+				holder:SetAttribute("SearchName", lbl.Text)
+			end
+			return Shimmer
+		end
+
+		function Tab:CreateSegmentedPicker(PickerSettings)
+			PickerSettings = PickerSettings or {}
+			local options = {}
+			for i, opt in ipairs(PickerSettings.Options or {}) do
+				if type(opt) == "string" then
+					options[i] = {Name = opt}
+				else
+					options[i] = {Name = opt.Name or ("Option " .. i), Subs = opt.Options}
+				end
+			end
+			if #options == 0 then
+				options = {{Name = "A"}, {Name = "B"}}
+			end
+
+			local card = create("Frame", {
+				Size = UDim2.new(1, 0, 0, 58),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", PickerSettings.Name or "")
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+			descFor(card, PickerSettings.Description)
+			tipFor(card, PickerSettings.Tooltip)
+
+			local track = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.new(1, -20, 0, 42),
+				BackgroundColor3 = Theme.CardInset,
+				Parent = card,
+			})
+			roundFull(track)
+
+			local indicator = create("Frame", {
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				ZIndex = 2,
+				Parent = track,
+			})
+			roundFull(indicator)
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224)),
+				Parent = indicator,
+			})
+
+			local Picker = {CurrentOption = nil, CurrentSub = nil}
+			local selMain = 1
+			local segs = {}
+
+			local function geometry()
+				local n = #options
+				local rects = {}
+				local sel = options[selMain]
+				if sel.Subs then
+					local wSel = n == 1 and 1 or 0.62
+					local wOther = n == 1 and 0 or (1 - wSel) / (n - 1)
+					local x = 0
+					for i = 1, n do
+						local w = (i == selMain) and wSel or wOther
+						rects[i] = {x = x, w = w}
+						x = x + w
+					end
+				else
+					for i = 1, n do
+						rects[i] = {x = (i - 1) / n, w = 1 / n}
+					end
+				end
+				return rects
+			end
+
+			local function relayout(animate)
+				local rects = geometry()
+				local r = rects[selMain]
+				local goalPos = UDim2.new(r.x, 4, 0, 4)
+				local goalSize = UDim2.new(r.w, -8, 1, -8)
+				if animate then
+					tween(indicator, TI_MORPH, {Position = goalPos, Size = goalSize})
+				else
+					indicator.Position = goalPos
+					indicator.Size = goalSize
+				end
+				for i, seg in ipairs(segs) do
+					local rect = rects[i]
+					local pos = UDim2.new(rect.x, 0, 0, 0)
+					local size = UDim2.new(rect.w, 0, 1, 0)
+					if animate then
+						tween(seg.Zone, TI_MORPH, {Position = pos, Size = size})
+					else
+						seg.Zone.Position = pos
+						seg.Zone.Size = size
+					end
+					local isSel = i == selMain
+					local hasSubsOpen = isSel and options[i].Subs ~= nil
+					tween(seg.Label, TI_MED, {
+						TextTransparency = hasSubsOpen and 1 or 0,
+						TextColor3 = isSel and Color3.fromRGB(28, 28, 28) or Theme.TextSub,
+					})
+					if seg.SubHolder then
+						seg.SubHolder.Visible = true
+						for _, s in ipairs(seg.SubLabels) do
+							tween(s, TI_MED, {TextTransparency = hasSubsOpen and 0 or 1})
+						end
+						tween(seg.SubIndicator, TI_MED, {BackgroundTransparency = hasSubsOpen and 0 or 1})
+						if not hasSubsOpen then
+							task.delay(0.28, function()
+								if selMain ~= i then seg.SubHolder.Visible = false end
+							end)
+						end
+					end
+				end
+			end
+
+			local function report(silent)
+				local opt = options[selMain]
+				Picker.CurrentOption = opt.Name
+				Picker.CurrentSub = opt.Subs and opt.Subs[segs[selMain].SubSel] or nil
+				if not silent then
+					runCallback(PickerSettings.Callback, Picker.CurrentOption, Picker.CurrentSub)
+				end
+			end
+
+			for i, opt in ipairs(options) do
+				local zone = create("Frame", {
+					BackgroundTransparency = 1,
+					ZIndex = 3,
+					Parent = track,
+				})
+				local label = create("TextButton", {
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Font = FONT_MEDIUM,
+					TextSize = 14,
+					TextColor3 = Theme.TextSub,
+					Text = opt.Name,
+					ZIndex = 4,
+					Parent = zone,
+				})
+				local seg = {Zone = zone, Label = label, SubSel = 1}
+				label.MouseButton1Click:Connect(function()
+					if selMain ~= i then
+						selMain = i
+						relayout(true)
+						report()
+					end
+				end)
+				if opt.Subs then
+					local subHolder = create("Frame", {
+						BackgroundTransparency = 1,
+						Position = UDim2.new(0, 6, 0, 6),
+						Size = UDim2.new(1, -12, 1, -12),
+						Visible = false,
+						ZIndex = 5,
+						Parent = zone,
+					})
+					local subIndicator = create("Frame", {
+						BackgroundColor3 = Color3.fromRGB(28, 28, 28),
+						BackgroundTransparency = 1,
+						ZIndex = 5,
+						Parent = subHolder,
+					})
+					roundFull(subIndicator)
+					seg.SubHolder = subHolder
+					seg.SubIndicator = subIndicator
+					seg.SubLabels = {}
+					local m = #opt.Subs
+					local function subGoal()
+						return UDim2.new((seg.SubSel - 1) / m, 0, 0, 0), UDim2.new(1 / m, 0, 1, 0)
+					end
+					for j, subName in ipairs(opt.Subs) do
+						local sbtn = create("TextButton", {
+							BackgroundTransparency = 1,
+							Position = UDim2.new((j - 1) / m, 0, 0, 0),
+							Size = UDim2.new(1 / m, 0, 1, 0),
+							Font = FONT_MEDIUM,
+							TextSize = 13,
+							TextColor3 = Color3.fromRGB(28, 28, 28),
+							TextTransparency = 1,
+							Text = subName,
+							ZIndex = 6,
+							Parent = subHolder,
+						})
+						seg.SubLabels[j] = sbtn
+						sbtn.MouseButton1Click:Connect(function()
+							if selMain ~= i then return end
+							seg.SubSel = j
+							local p, s = subGoal()
+							tween(subIndicator, TI_MORPH, {Position = p, Size = s})
+							for k, other in ipairs(seg.SubLabels) do
+								tween(other, TI_MED, {TextColor3 = k == j and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(28, 28, 28)})
+							end
+							report()
+						end)
+					end
+					local p, s = subGoal()
+					subIndicator.Position = p
+					subIndicator.Size = s
+					seg.SubLabels[seg.SubSel].TextColor3 = Color3.fromRGB(255, 255, 255)
+				end
+				segs[i] = seg
+			end
+
+			local function findMain(name)
+				for i, opt in ipairs(options) do
+					if opt.Name == name then return i end
+				end
+			end
+			if PickerSettings.CurrentOption then
+				local want = PickerSettings.CurrentOption
+				local mainName = type(want) == "table" and want[1] or want
+				local subName = type(want) == "table" and want[2] or nil
+				local mi = findMain(mainName)
+				if mi then
+					selMain = mi
+					if subName and options[mi].Subs then
+						for j, s in ipairs(options[mi].Subs) do
+							if s == subName then segs[mi].SubSel = j end
+						end
+						local m = #options[mi].Subs
+						segs[mi].SubIndicator.Position = UDim2.new((segs[mi].SubSel - 1) / m, 0, 0, 0)
+						segs[mi].SubIndicator.Size = UDim2.new(1 / m, 0, 1, 0)
+						for k, other in ipairs(segs[mi].SubLabels) do
+							other.TextColor3 = k == segs[mi].SubSel and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(28, 28, 28)
+						end
+					end
+				end
+			end
+			relayout(false)
+			report(true)
+
+			function Picker:Set(mainName, subName)
+				local mi = findMain(mainName)
+				if not mi then return end
+				selMain = mi
+				if subName and options[mi].Subs then
+					for j, s in ipairs(options[mi].Subs) do
+						if s == subName then segs[mi].SubSel = j end
+					end
+					local m = #options[mi].Subs
+					tween(segs[mi].SubIndicator, TI_MORPH, {
+						Position = UDim2.new((segs[mi].SubSel - 1) / m, 0, 0, 0),
+						Size = UDim2.new(1 / m, 0, 1, 0),
+					})
+					for k, other in ipairs(segs[mi].SubLabels) do
+						tween(other, TI_MED, {TextColor3 = k == segs[mi].SubSel and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(28, 28, 28)})
+					end
+				end
+				relayout(true)
+				report()
+			end
+			return Picker
+		end
+
 		function Tab:CreateSlider(SliderSettings)
 			SliderSettings = SliderSettings or {}
 			local range = SliderSettings.Range or {0, 100}
@@ -5402,6 +5701,53 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	function Window:SetSubtitle(newSubtitle)
 		subtitleLabel.Text = newSubtitle or subtitleLabel.Text
+	end
+
+	function Window:Greet(GreetSettings)
+		GreetSettings = GreetSettings or {}
+		local texts = GreetSettings.Texts or {"Hello", "bonjour", "\227\130\132\227\129\130", "Guten tag", "hola", "ciao"}
+		local hold = GreetSettings.Hold or 0.34
+
+		local overlay = create("Frame", {
+			Name = "Greeting",
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.new(0.5, 0, 0, -40),
+			Size = UDim2.new(1.6, 0, 1, 140),
+			BackgroundColor3 = Color3.fromRGB(250, 250, 250),
+			ZIndex = 900,
+			Parent = window,
+		})
+		round(overlay, 90)
+		local word = create("TextLabel", {
+			BackgroundTransparency = 1,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, 0, 0.5, -30),
+			Size = UDim2.new(0.6, 0, 0, 40),
+			Font = FONT_MEDIUM,
+			TextSize = 26,
+			TextColor3 = Color3.fromRGB(40, 40, 40),
+			TextTransparency = 1,
+			Text = "",
+			ZIndex = 901,
+			Parent = overlay,
+		})
+
+		task.spawn(function()
+			for _, t in ipairs(texts) do
+				word.Text = t
+				tween(word, TI_FAST, {TextTransparency = 0.1})
+				task.wait(hold)
+				tween(word, TI_FAST, {TextTransparency = 1})
+				task.wait(0.16)
+			end
+			tween(word, TI_FAST, {TextTransparency = 1})
+			tween(overlay, TweenInfo.new(0.65, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0.5, 0, -1, -220),
+			})
+			task.delay(0.7, function()
+				overlay:Destroy()
+			end)
+		end)
 	end
 
 	local hasLoading = (Settings.LoadingTitle and Settings.LoadingTitle ~= "") or (Settings.LoadingSubtitle and Settings.LoadingSubtitle ~= "")
