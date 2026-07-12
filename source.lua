@@ -1541,7 +1541,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 		Size = UDim2.fromOffset(0, 36),
 		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 		BackgroundTransparency = 1,
-		ZIndex = 2,
+		ZIndex = 3,
 		Parent = dockTrack,
 	})
 	roundFull(dockIndicator)
@@ -1550,8 +1550,16 @@ function RayfieldLibrary:CreateWindow(Settings)
 		Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(224, 224, 224)),
 		Parent = dockIndicator,
 	})
-	local dockGlow = softGlow(dockIndicator, tabAccent, 0.4, 58, 1)
-	dockGlow.Position = UDim2.new(0.5, 0, 0.5, 8)
+	local dockGlowHost = create("Frame", {
+		Name = "DockGlowHost",
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(80, 36),
+		Position = UDim2.fromOffset(0, TABBAR_H / 2 + 7),
+		ZIndex = 2,
+		Parent = body,
+	})
+	local dockGlow = softGlow(dockGlowHost, tabAccent, 0.4, 58, 2)
 	glowSet(dockGlow, 0)
 	local dockButtons = create("Frame", {
 		BackgroundTransparency = 1,
@@ -1788,13 +1796,19 @@ function RayfieldLibrary:CreateWindow(Settings)
 		local goalPos = UDim2.fromOffset(x, 4)
 		local goalSize = UDim2.fromOffset(btn.AbsoluteSize.X, 36)
 		local glowAmount = tabStyle == "Accent" and 1 or 0
+		local hostX = btn.AbsolutePosition.X - body.AbsolutePosition.X + btn.AbsoluteSize.X / 2
+		local hostPos = UDim2.fromOffset(hostX, TABBAR_H / 2 + 7)
+		local hostSize = UDim2.fromOffset(btn.AbsoluteSize.X, 36)
 		if animate then
 			tween(dockIndicator, TI_DOCK, {Position = goalPos, Size = goalSize, BackgroundTransparency = 0})
+			tween(dockGlowHost, TI_DOCK, {Position = hostPos, Size = hostSize})
 			glowSet(dockGlow, glowAmount, TI_DOCK)
 		else
 			dockIndicator.Position = goalPos
 			dockIndicator.Size = goalSize
 			dockIndicator.BackgroundTransparency = 0
+			dockGlowHost.Position = hostPos
+			dockGlowHost.Size = hostSize
 			glowSet(dockGlow, glowAmount)
 		end
 	end

@@ -38,7 +38,6 @@ Home:CreateColorPicker({
 	Name = "Tab accent color",
 	Icon = "palette",
 	Color = Color3.fromRGB(74, 178, 124),
-	Flag = "AccentColor",
 	Callback = function(color)
 		Window:SetTabAccent(color)
 		print(("Tab accent: %d, %d, %d"):format(color.R * 255, color.G * 255, color.B * 255))
