@@ -4114,8 +4114,10 @@ function RayfieldLibrary:CreateWindow(Settings)
 			padAll(chip, 4, 8, 4, 8)
 
 			local shown = false
+			local enabled = TagSettings.Enabled ~= false
 			local hideToken = 0
 			local function showChip()
+				if not enabled then return end
 				hideToken = hideToken + 1
 				shown = true
 				chip.Visible = true
@@ -4162,6 +4164,14 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local Tag = {}
 			function Tag:Set(newText)
 				chip.Text = newText or chip.Text
+			end
+			function Tag:SetEnabled(state)
+				state = state ~= false
+				if enabled == state then return end
+				enabled = state
+				if not enabled then
+					hideChip()
+				end
 			end
 			return Tag
 		end

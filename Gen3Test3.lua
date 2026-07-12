@@ -70,12 +70,23 @@ local Tag = Test:CreateCursorTag({
 	Scope = "Area",
 })
 
-Test:CreateCursorTag({
+local MenuTag = Test:CreateCursorTag({
 	Text = "You",
 	Height = 70,
 	Hint = "Window scope: this one follows you across the whole menu",
 	Scope = "Window",
 	Offset = {X = 16, Y = 22},
+})
+
+Test:CreateToggle({
+	Name = "Menu cursor tag",
+	Description = "Turns the window scoped tag on or off.",
+	CurrentValue = true,
+	Flag = "MenuCursorTag",
+	Callback = function(value)
+		MenuTag:SetEnabled(value)
+		print("Menu cursor tag:", value)
+	end,
 })
 
 Test:CreateButton({
