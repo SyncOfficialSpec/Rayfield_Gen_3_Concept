@@ -43,7 +43,33 @@ Test:CreateSection("Text shimmer")
 
 local Shimmer = Test:CreateShimmerLabel({
 	Text = "Text Shimmer",
-	TextSize = 22,
+	TextSize = 30,
+	Height = 46,
+	Bold = true,
+})
+
+Test:CreateSlider({
+	Name = "Shimmer speed",
+	Range = {0.5, 4},
+	Increment = 0.1,
+	Suffix = "s",
+	CurrentValue = 1.4,
+	Flag = "ShimmerSpeed",
+	Callback = function(value)
+		Shimmer:SetSpeed(value)
+	end,
+})
+
+Test:CreateSlider({
+	Name = "Shimmer spread",
+	Range = {5, 45},
+	Increment = 1,
+	Suffix = "%",
+	CurrentValue = 20,
+	Flag = "ShimmerSpread",
+	Callback = function(value)
+		Shimmer:SetSpread(value / 100)
+	end,
 })
 
 local ShimmerLines = {

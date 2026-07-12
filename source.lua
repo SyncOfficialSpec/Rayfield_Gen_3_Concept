@@ -4188,28 +4188,40 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local lbl = create("TextLabel", {
 				BackgroundTransparency = 1,
 				Size = UDim2.fromScale(1, 1),
-				Font = FONT_MEDIUM,
+				Font = ShimmerSettings.Bold and FONT_BOLD or FONT_MEDIUM,
 				TextSize = ShimmerSettings.TextSize or 20,
 				TextColor3 = Color3.fromRGB(255, 255, 255),
 				Text = ShimmerSettings.Text or "Shimmer",
 				Parent = holder,
 			})
 			local grad = create("UIGradient", {
-				Color = ColorSequence.new({
-					ColorSequenceKeypoint.new(0, Color3.fromRGB(110, 110, 110)),
-					ColorSequenceKeypoint.new(0.3, Color3.fromRGB(110, 110, 110)),
-					ColorSequenceKeypoint.new(0.42, Color3.fromRGB(190, 190, 190)),
-					ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
-					ColorSequenceKeypoint.new(0.58, Color3.fromRGB(190, 190, 190)),
-					ColorSequenceKeypoint.new(0.7, Color3.fromRGB(110, 110, 110)),
-					ColorSequenceKeypoint.new(1, Color3.fromRGB(110, 110, 110)),
-				}),
 				Offset = Vector2.new(-1, 0),
 				Rotation = ShimmerSettings.Rotation or 8,
 				Parent = lbl,
 			})
-			local speed = ShimmerSettings.Speed or 1.4
+
+			local spread = math.clamp(ShimmerSettings.Spread or 0.2, 0.05, 0.45)
+			local speed = math.clamp(ShimmerSettings.Speed or 1.4, 0.3, 6)
 			local rest = ShimmerSettings.Rest or 0.35
+
+			local function rebuild()
+				local base = Color3.fromRGB(110, 110, 110)
+				local glow = Color3.fromRGB(190, 190, 190)
+				local core = Color3.fromRGB(255, 255, 255)
+				local lo = 0.5 - spread
+				local hi = 0.5 + spread
+				grad.Color = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, base),
+					ColorSequenceKeypoint.new(math.max(0.001, lo), base),
+					ColorSequenceKeypoint.new(0.5 - spread * 0.4, glow),
+					ColorSequenceKeypoint.new(0.5, core),
+					ColorSequenceKeypoint.new(0.5 + spread * 0.4, glow),
+					ColorSequenceKeypoint.new(math.min(0.999, hi), base),
+					ColorSequenceKeypoint.new(1, base),
+				})
+			end
+			rebuild()
+
 			task.spawn(function()
 				while grad.Parent do
 					grad.Offset = Vector2.new(-1, 0)
@@ -4223,6 +4235,13 @@ function RayfieldLibrary:CreateWindow(Settings)
 			function Shimmer:Set(newText)
 				lbl.Text = newText or lbl.Text
 				holder:SetAttribute("SearchName", lbl.Text)
+			end
+			function Shimmer:SetSpeed(newSpeed)
+				speed = math.clamp(tonumber(newSpeed) or speed, 0.3, 6)
+			end
+			function Shimmer:SetSpread(newSpread)
+				spread = math.clamp(tonumber(newSpread) or spread, 0.05, 0.45)
+				rebuild()
 			end
 			return Shimmer
 		end
@@ -5712,23 +5731,14 @@ function RayfieldLibrary:CreateWindow(Settings)
 		GreetSettings = GreetSettings or {}
 		local texts = GreetSettings.Texts or {
 			"Hello",
-			"bonjour",
-			"やあ",
-			"Guten Tag",
+			"\228\189\160\229\165\189",
+			"\224\164\168\224\164\174\224\164\184\224\165\141\224\164\164\224\165\135",
 			"hola",
-			"ciao",
-			"olá",
-			"안녕하세요",
-			"你好",
-			"नमस्ते",
-			"ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ",
-			"привет",
-			"merhaba",
-			"xin chào",
-			"สวัสดี",
-			"hej",
+			"bonjour",
+			"\217\133\216\177\216\173\216\168\216\167",
+			"ol\195\161",
 		}
-		local hold = GreetSettings.Hold or 0.3
+		local hold = GreetSettings.Hold or 0.5
 
 		local clipper = create("CanvasGroup", {
 			Name = "Greeting",
@@ -5751,10 +5761,10 @@ function RayfieldLibrary:CreateWindow(Settings)
 			BackgroundTransparency = 1,
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.new(0.5, 0, 0.5, -30),
-			Size = UDim2.new(0.6, 0, 0, 40),
-			Font = FONT_MEDIUM,
-			TextSize = 26,
-			TextColor3 = Color3.fromRGB(40, 40, 40),
+			Size = UDim2.new(0.8, 0, 0, 44),
+			Font = FONT_BOLD,
+			TextSize = 28,
+			TextColor3 = Color3.fromRGB(35, 35, 35),
 			TextTransparency = 1,
 			Text = "",
 			ZIndex = 901,
@@ -5762,18 +5772,22 @@ function RayfieldLibrary:CreateWindow(Settings)
 		})
 
 		task.spawn(function()
+			local baseY = -30
 			for _, t in ipairs(texts) do
 				word.Text = t
-				tween(word, TI_FAST, {TextTransparency = 0.1})
+				word.Position = UDim2.new(0.5, 0, 0.5, baseY + 12)
+				tween(word, TI_SMOOTH, {TextTransparency = 0, Position = UDim2.new(0.5, 0, 0.5, baseY)})
 				task.wait(hold)
-				tween(word, TI_FAST, {TextTransparency = 1})
-				task.wait(0.16)
+				tween(word, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+					TextTransparency = 1,
+					Position = UDim2.new(0.5, 0, 0.5, baseY - 12),
+				})
+				task.wait(0.24)
 			end
-			tween(word, TI_FAST, {TextTransparency = 1})
-			tween(overlay, TweenInfo.new(0.65, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
+			tween(overlay, TweenInfo.new(0.7, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), {
 				Position = UDim2.new(0.5, 0, -1, -220),
 			})
-			task.delay(0.7, function()
+			task.delay(0.75, function()
 				clipper:Destroy()
 			end)
 		end)
