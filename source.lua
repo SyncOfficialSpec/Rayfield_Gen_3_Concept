@@ -5710,8 +5710,25 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	function Window:Greet(GreetSettings)
 		GreetSettings = GreetSettings or {}
-		local texts = GreetSettings.Texts or {"Hello", "bonjour", "\227\130\132\227\129\130", "Guten tag", "hola", "ciao"}
-		local hold = GreetSettings.Hold or 0.34
+		local texts = GreetSettings.Texts or {
+			"Hello",
+			"bonjour",
+			"やあ",
+			"Guten Tag",
+			"hola",
+			"ciao",
+			"olá",
+			"안녕하세요",
+			"你好",
+			"नमस्ते",
+			"ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ",
+			"привет",
+			"merhaba",
+			"xin chào",
+			"สวัสดี",
+			"hej",
+		}
+		local hold = GreetSettings.Hold or 0.3
 
 		local clipper = create("CanvasGroup", {
 			Name = "Greeting",

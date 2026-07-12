@@ -73,9 +73,7 @@ Test:CreateButton({
 	Icon = "hand",
 	Tooltip = "Replays the hello intro over the window",
 	Callback = function()
-		Window:Greet({
-			Texts = {"Hello", "bonjour", "hola", "Guten tag", "ciao"},
-		})
+		Window:Greet()
 		print("Greeting played")
 	end,
 })
