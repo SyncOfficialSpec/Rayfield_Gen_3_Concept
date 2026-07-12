@@ -18,6 +18,22 @@ local Home = Window:CreateTab("Home", "house")
 local Player = Window:CreateTab("Player", "user")
 local Visuals = Window:CreateTab("Visuals", "eye")
 
+-- which picker currently drives the tab accent ("solid", "gradient", or nil)
+local connected = nil
+local SolidConnect, GradientConnect
+
+local function evalSeq(seq, t)
+	local kps = seq.Keypoints
+	for i = 1, #kps - 1 do
+		if t >= kps[i].Time and t <= kps[i + 1].Time then
+			local a, b = kps[i], kps[i + 1]
+			local f = (b.Time == a.Time) and 0 or (t - a.Time) / (b.Time - a.Time)
+			return a.Value:Lerp(b.Value, f)
+		end
+	end
+	return kps[#kps].Value
+end
+
 Home:CreateSection("Tab dock")
 
 Home:CreateSegmentedPicker({
@@ -26,16 +42,25 @@ Home:CreateSegmentedPicker({
 	CurrentOption = "Accent",
 	Callback = function(style)
 		Window:SetTabStyle(style)
-		print("Tab style:", style)
 	end,
 })
 
-Home:CreateColorPicker({
+local AccentPicker = Home:CreateColorPicker({
 	Name = "Tab accent color",
 	Icon = "palette",
 	Color = Color3.fromRGB(74, 178, 124),
 	Callback = function(color)
-		Window:SetTabAccent(color)
+		if not connected then
+			Window:SetTabAccent(color)
+		end
+	end,
+})
+
+Home:CreateToggle({
+	Name = "Tab accent glow",
+	CurrentValue = true,
+	Callback = function(value)
+		AccentPicker:SetGlow(value)
 	end,
 })
 
@@ -44,19 +69,34 @@ Home:CreateSection("Single color picker")
 local Solid = Home:CreateColorPicker({
 	Name = "Solid color",
 	Icon = "paintbrush",
-	Color = Color3.fromRGB(74, 178, 124),
+	Color = Color3.fromRGB(255, 120, 60),
 	Callback = function(color)
-		print(("Solid: %d,%d,%d"):format(color.R * 255, color.G * 255, color.B * 255))
+		if connected == "solid" then
+			Window:SetTabAccent(color)
+		end
 	end,
 })
 
 Home:CreateToggle({
-	Name = "Color picker glow",
-	Description = "Turns the glow behind the single color picker swatch on or off.",
+	Name = "Solid glow",
 	CurrentValue = true,
 	Callback = function(value)
 		Solid:SetGlow(value)
-		print("Color picker glow:", value)
+	end,
+})
+
+SolidConnect = Home:CreateToggle({
+	Name = "Connect solid to tab accent",
+	Description = "Drives the tab accent from this color. Turns off the gradient connection.",
+	CurrentValue = false,
+	Callback = function(value)
+		if value then
+			connected = "solid"
+			if GradientConnect then GradientConnect:Set(false) end
+			Window:SetTabAccent(Solid.Color)
+		elseif connected == "solid" then
+			connected = nil
+		end
 	end,
 })
 
@@ -72,17 +112,32 @@ local Gradient = Home:CreateGradientPicker({
 	}),
 	Flag = "ThemeGradient",
 	Callback = function(seq)
-		print("Gradient stops:", #seq.Keypoints)
+		if connected == "gradient" then
+			Window:SetTabAccent(evalSeq(seq, 0.5))
+		end
 	end,
 })
 
 Home:CreateToggle({
 	Name = "Gradient glow",
-	Description = "Turns the glow behind the gradient swatch on or off.",
 	CurrentValue = true,
 	Callback = function(value)
 		Gradient:SetGlow(value)
-		print("Gradient glow:", value)
+	end,
+})
+
+GradientConnect = Home:CreateToggle({
+	Name = "Connect gradient to tab accent",
+	Description = "Drives the tab accent from the gradient midpoint. Turns off the solid connection.",
+	CurrentValue = false,
+	Callback = function(value)
+		if value then
+			connected = "gradient"
+			if SolidConnect then SolidConnect:Set(false) end
+			Window:SetTabAccent(evalSeq(Gradient.Value, 0.5))
+		elseif connected == "gradient" then
+			connected = nil
+		end
 	end,
 })
 
@@ -94,7 +149,7 @@ Visuals:CreateButton({Name = "Example button", Callback = function() end})
 
 Rayfield:Notify({
 	Title = "Gen3 Test5 loaded",
-	Content = "Try the tabs, both pickers, and the glow toggles.",
+	Content = "Toggle each picker's glow, and connect one picker to the tab accent.",
 	Duration = 5,
 	Icon = "check",
 })
