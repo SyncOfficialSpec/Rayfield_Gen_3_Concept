@@ -5382,6 +5382,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 			round(sv, 9)
 			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.85, Parent = sv})
 			local svGlow = softGlow(sv, color, 0.4, 30, 0)
+			local glowOn = ColorPickerSettings.Glow ~= false
+			if not glowOn then glowSet(svGlow, 0) end
 
 			local satOverlay = create("Frame", {
 				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
@@ -5737,6 +5739,11 @@ function RayfieldLibrary:CreateWindow(Settings)
 				refresh()
 			end
 
+			function ColorPicker:SetGlow(state)
+				glowOn = state ~= false
+				glowSet(svGlow, glowOn and 1 or 0, TI_FAST)
+			end
+
 			if ColorPickerSettings.Flag then
 				ColorPicker.Flag = ColorPickerSettings.Flag
 				RayfieldLibrary.Flags[ColorPickerSettings.Flag] = ColorPicker
@@ -5856,6 +5863,9 @@ function RayfieldLibrary:CreateWindow(Settings)
 			round(previewBar, 9)
 			local previewGrad = create("UIGradient", {Parent = previewBar})
 			create("UIStroke", {Color = Theme.Stroke, Transparency = 0.85, Parent = previewBar})
+			local pvGlow = softGlow(previewBar, Color3.fromHSV(stops[1].H, stops[1].S, stops[1].V), 0.4, 30, 0)
+			local glowOn = GradientSettings.Glow ~= false
+			if not glowOn then glowSet(pvGlow, 0) end
 
 			-- stops rail
 			local rail = create("TextButton", {
@@ -6001,6 +6011,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 			refresh = function()
 				previewGrad.Color = buildSequence()
+				glowColor(pvGlow, colorAt(0.5))
 				local st = stops[selIdx]
 				local hueColor = Color3.fromHSV(st.H, 1, 1)
 				sv.BackgroundColor3 = hueColor
@@ -6182,6 +6193,10 @@ function RayfieldLibrary:CreateWindow(Settings)
 					table.insert(out, {T = st.Pos, R = math.floor(c.R * 255 + 0.5), G = math.floor(c.G * 255 + 0.5), B = math.floor(c.B * 255 + 0.5)})
 				end
 				return out
+			end
+			function GradientPicker:SetGlow(state)
+				glowOn = state ~= false
+				glowSet(pvGlow, glowOn and 1 or 0, TI_FAST)
 			end
 
 			if GradientSettings.Flag then
