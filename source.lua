@@ -6621,10 +6621,11 @@ local function _constructWindow(Settings)
 			tipFor(card, HoldSettings.Tooltip)
 			hoverable(card)
 
-			local fillClip = create("Frame", {
+			-- CanvasGroup so the sweeping fill is clipped to the card's rounded
+			-- corners (ClipsDescendants ignores UICorner, a CanvasGroup does not).
+			local fillClip = create("CanvasGroup", {
 				BackgroundTransparency = 1,
 				Size = UDim2.fromScale(1, 1),
-				ClipsDescendants = true,
 				ZIndex = 0,
 				Parent = card,
 			})
