@@ -189,7 +189,7 @@ local THEME_ORDER = {"Default", "Ocean", "Amber", "Rose", "Emerald", "Amethyst",
 -- Generation-switch engine state. The heavy functions are defined after the
 -- window constructor (which they rebuild); forward-declared here so the
 -- constructor's settings menu can call them.
-local GEN = { generation = "Gen3", theme = "Default", transparency = 0, acrylic = false, blueprint = nil, windowCell = nil, windowProxy = nil }
+local GEN = { generation = "Gen3", theme = "Default", transparency = 0, acrylic = false, acrylicPrevT = 0, blueprint = nil, windowCell = nil, windowProxy = nil }
 local suppressCallbacks = false
 local applyStyle, performRebuild, applyFont, persistChoice
 
@@ -7575,14 +7575,20 @@ local function _constructWindow(Settings)
 		persistChoice()
 	end
 
-	-- Frosted-glass blur of the game behind the (see-through) window
+	-- Frosted-glass blur of the game behind the (see-through) window. Turning it
+	-- on makes the window see-through so the frost shows; turning it off restores
+	-- the transparency the window had before, so it goes solid again.
 	function Window:SetAcrylic(state)
-		GEN.acrylic = state and true or false
-		if GEN.acrylic then
+		state = state and true or false
+		local was = GEN.acrylic
+		GEN.acrylic = state
+		if state then
 			enableAcrylic(window)
+			if not was then GEN.acrylicPrevT = GEN.transparency end
 			if GEN.transparency < 0.2 then Window:SetTransparency(0.4) end
 		else
 			clearAcrylic()
+			if was then Window:SetTransparency(GEN.acrylicPrevT or 0) end
 		end
 		persistChoice()
 	end
@@ -7962,7 +7968,10 @@ function RayfieldLibrary:CreateWindow(Settings)
 	if type(Settings.Transparency) == "number" then GEN.transparency = math.clamp(Settings.Transparency, 0, 0.92) end
 	if Settings.Acrylic ~= nil then
 		GEN.acrylic = Settings.Acrylic and true or false
-		if GEN.acrylic and GEN.transparency < 0.2 then GEN.transparency = 0.4 end
+		if GEN.acrylic then
+			GEN.acrylicPrevT = GEN.transparency
+			if GEN.transparency < 0.2 then GEN.transparency = 0.4 end
+		end
 	end
 	loadPersistedChoice()
 	applyStyle()

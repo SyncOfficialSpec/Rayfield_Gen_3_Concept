@@ -6,8 +6,7 @@ local Window = Rayfield:CreateWindow({
 	Icon = "sparkles",
 	Badge = { Text = "phase 7", Icon = "flask-conical" },
 	TabStyle = "Accent",
-	Transparency = 0.4, -- glassy window; adjust live in the gear settings
-	Acrylic = true, -- frosted-glass blur of the game behind the window
+	Acrylic = true, -- frosted-glass blur; makes the window see-through so the frost shows
 	ConfigurationSaving = { Enabled = true, FolderName = "Gen3Test7", FileName = "cfg" },
 })
 
