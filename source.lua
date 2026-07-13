@@ -951,6 +951,11 @@ function RayfieldLibrary:Dialog(data)
 		options = { { Text = data.AcceptText or "OK" } }
 	end
 
+	local function textOn(c)
+		local l = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B
+		return l > 0.6 and Color3.fromRGB(20, 20, 20) or Color3.fromRGB(245, 245, 245)
+	end
+
 	local overlay = create("Frame", {
 		Name = "Dialog",
 		Size = UDim2.fromScale(1, 1),
@@ -959,43 +964,79 @@ function RayfieldLibrary:Dialog(data)
 		ZIndex = 500,
 		Parent = rootGui,
 	})
-	local block = create("TextButton", {
+	create("TextButton", {
 		BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), ZIndex = 500, Parent = overlay,
 	})
 
-	local card = create("Frame", {
+	-- CanvasGroup so the whole card fades and scales as one unit
+	local card = create("CanvasGroup", {
+		Name = "Card",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(400, 0),
+		Size = UDim2.fromOffset(430, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
+		GroupTransparency = 1,
 		ZIndex = 501,
 		Parent = overlay,
 	})
 	paint(card, "BackgroundColor3", "Background")
-	round(card, math.max(14, GenStyle.cardRadius))
+	round(card, math.max(16, GenStyle.cardRadius + 2))
 	create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = card })
+	local scale = create("UIScale", { Scale = 0.92, Parent = card })
 	create("UIListLayout", {
 		FillDirection = Enum.FillDirection.Vertical,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, 12),
+		Padding = UDim.new(0, 14),
 		Parent = card,
 	})
-	padAll(card, 22, 22, 20, 22)
+	padAll(card, 22, 24, 22, 24)
 
-	if data.Icon then
-		local ic = makeIcon(card, data.Icon, 26, Theme.TextTitle)
-		if ic then ic.LayoutOrder = 0 end
+	local closed = false
+	local function close()
+		if closed then return end
+		closed = true
+		tween(overlay, TI_FAST, { BackgroundTransparency = 1 })
+		tween(card, TI_FAST, { GroupTransparency = 1 })
+		tween(scale, TI_FAST, { Scale = 0.94 })
+		task.delay(0.16, function() overlay:Destroy() end)
+	end
+
+	-- title row: close (x) on the left, then the title
+	local titleRow = create("Frame", {
+		BackgroundTransparency = 1,
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Size = UDim2.new(1, 0, 0, 30),
+		LayoutOrder = 1, ZIndex = 501, Parent = card,
+	})
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 12),
+		Parent = titleRow,
+	})
+	local closeBtn = create("TextButton", {
+		BackgroundTransparency = 1, Text = "",
+		Size = UDim2.fromOffset(26, 26), LayoutOrder = 1, ZIndex = 502, Parent = titleRow,
+	})
+	do
+		local xi = makeIcon(closeBtn, "x", 22, Theme.TextSub)
+		if xi then xi.AnchorPoint = Vector2.new(0.5, 0.5); xi.Position = UDim2.fromScale(0.5, 0.5); xi.ZIndex = 502 end
+		closeBtn.MouseEnter:Connect(function() if xi then tween(xi, TI_FAST, { ImageColor3 = Theme.TextTitle }) end end)
+		closeBtn.MouseLeave:Connect(function() if xi then tween(xi, TI_FAST, { ImageColor3 = Theme.TextSub }) end end)
+		closeBtn.MouseButton1Click:Connect(close)
 	end
 	local title = create("TextLabel", {
 		BackgroundTransparency = 1,
-		AutomaticSize = Enum.AutomaticSize.Y,
-		Size = UDim2.new(1, 0, 0, 0),
-		Font = FONT_BOLD, TextSize = 20,
-		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+		AutomaticSize = Enum.AutomaticSize.XY,
+		Size = UDim2.new(0, 0, 0, 26),
+		Font = FONT_BOLD, TextSize = 22,
+		TextXAlignment = Enum.TextXAlignment.Left,
 		Text = data.Title or "Are you sure?",
-		LayoutOrder = 1, ZIndex = 501, Parent = card,
+		LayoutOrder = 2, ZIndex = 501, Parent = titleRow,
 	})
 	paint(title, "TextColor3", "TextTitle")
+
 	if data.Content and data.Content ~= "" then
 		local body = create("TextLabel", {
 			BackgroundTransparency = 1,
@@ -1009,49 +1050,49 @@ function RayfieldLibrary:Dialog(data)
 		paint(body, "TextColor3", "TextSub")
 	end
 
+	-- button row: equal-width pill buttons filling the card
 	local row = create("Frame", {
 		BackgroundTransparency = 1,
-		AutomaticSize = Enum.AutomaticSize.Y,
-		Size = UDim2.new(1, 0, 0, 40),
+		Size = UDim2.new(1, 0, 0, 48),
 		LayoutOrder = 3, ZIndex = 501, Parent = card,
 	})
+	local gap = 10
 	create("UIListLayout", {
 		FillDirection = Enum.FillDirection.Horizontal,
-		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
 		VerticalAlignment = Enum.VerticalAlignment.Center,
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Padding = UDim.new(0, 8),
+		Padding = UDim.new(0, gap),
 		Parent = row,
 	})
-
-	local closed = false
-	local function close()
-		if closed then return end
-		closed = true
-		tween(overlay, TI_FAST, { BackgroundTransparency = 1 })
-		tween(card, TI_FAST, { Position = UDim2.new(0.5, 0, 0.5, 12) })
-		task.delay(0.16, function() overlay:Destroy() end)
-	end
+	local n = #options
+	local adj = math.floor(gap * (n - 1) / n + 0.5)
 
 	for i, opt in ipairs(options) do
+		local isCustom = opt.Color ~= nil or opt.Primary == true
+		-- neutral buttons use a theme surface so they tint with the active theme
+		local bg = opt.Color or (opt.Primary and Theme.Accent) or Theme.CardSelected
 		local btn = create("TextButton", {
-			AutomaticSize = Enum.AutomaticSize.X,
-			Size = UDim2.new(0, 0, 0, 36),
+			Size = UDim2.new(1 / n, -adj, 1, 0),
 			Text = "",
-			BackgroundColor3 = opt.Primary and Theme.Accent or Theme.Card,
+			BackgroundColor3 = bg,
 			LayoutOrder = i, ZIndex = 502, Parent = row,
 		})
-		round(btn, math.max(8, GenStyle.cardRadius - 4))
-		padAll(btn, 0, 18, 0, 18)
-		local bl = create("TextLabel", {
+		roundFull(btn)
+		create("TextLabel", {
 			BackgroundTransparency = 1,
-			AutomaticSize = Enum.AutomaticSize.X,
-			Size = UDim2.new(0, 0, 1, 0),
-			Font = FONT_BOLD, TextSize = 15,
+			Size = UDim2.fromScale(1, 1),
+			Font = FONT_BOLD, TextSize = 16,
 			Text = opt.Text or "OK",
-			TextColor3 = opt.Primary and Color3.fromRGB(20, 20, 20) or Theme.TextBody,
+			TextColor3 = isCustom and textOn(bg) or Theme.TextTitle,
 			ZIndex = 502, Parent = btn,
 		})
+		btn.MouseEnter:Connect(function()
+			tween(btn, TI_FAST, { BackgroundColor3 = bg:Lerp(Color3.new(1, 1, 1), 0.1) })
+		end)
+		btn.MouseLeave:Connect(function()
+			tween(btn, TI_FAST, { BackgroundColor3 = bg })
+		end)
 		btn.MouseButton1Click:Connect(function()
 			close()
 			if type(opt.Callback) == "function" then
@@ -1063,9 +1104,10 @@ function RayfieldLibrary:Dialog(data)
 		end)
 	end
 
-	card.Position = UDim2.new(0.5, 0, 0.5, 12)
-	tween(overlay, TI_MED, { BackgroundTransparency = 0.45 })
-	tween(card, TI_SMOOTH, { Position = UDim2.fromScale(0.5, 0.5) })
+	-- smooth pop in
+	tween(overlay, TI_MED, { BackgroundTransparency = 0.5 })
+	tween(card, TI_SMOOTH, { GroupTransparency = 0 })
+	tween(scale, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
 	return { Close = close }
 end
 
@@ -2193,32 +2235,43 @@ local function _constructWindow(Settings)
 		end)
 	end
 
-	-- Lockable element: an overlay that dims the card and swallows input.
-	-- Returns setLocked(state); locked?() via the closure.
+	-- Lockable element: an overlay that dims the card and swallows input, with a
+	-- lock glyph. Fades in and out. Returns setLocked(state).
 	local function lockOverlay(card, startLocked)
-		local shield
+		local shield, lk
+		local locked = false
 		local function setLocked(state)
-			if state and not shield then
-				shield = create("TextButton", {
-					Name = "LockShield",
-					BackgroundColor3 = Theme.Background,
-					BackgroundTransparency = 0.5,
-					AutoButtonColor = false,
-					Text = "",
-					Size = UDim2.fromScale(1, 1),
-					ZIndex = 40,
-					Parent = card,
-				})
-				round(shield, GenStyle.cardRadius)
-				local lk = makeIcon(shield, "lock", 14, Theme.TextSub)
-				if lk then
-					lk.AnchorPoint = Vector2.new(1, 0.5)
-					lk.Position = UDim2.new(1, -14, 0.5, 0)
-					lk.ZIndex = 41
+			state = state and true or false
+			if state == locked then return end
+			locked = state
+			if state then
+				if not shield then
+					shield = create("TextButton", {
+						Name = "LockShield",
+						BackgroundColor3 = Theme.Background,
+						BackgroundTransparency = 1,
+						AutoButtonColor = false,
+						Text = "",
+						Size = UDim2.fromScale(1, 1),
+						ZIndex = 40,
+						Parent = card,
+					})
+					round(shield, GenStyle.cardRadius)
+					lk = makeIcon(shield, "lock", 14, Theme.TextSub)
+					if lk then
+						lk.AnchorPoint = Vector2.new(1, 0.5)
+						lk.Position = UDim2.new(1, -14, 0.5, 0)
+						lk.ZIndex = 41
+						lk.ImageTransparency = 1
+					end
 				end
-			elseif not state and shield then
-				shield:Destroy()
-				shield = nil
+				shield.Visible = true
+				tween(shield, TI_SMOOTH, { BackgroundTransparency = 0.45 })
+				if lk then tween(lk, TI_SMOOTH, { ImageTransparency = 0 }) end
+			elseif shield then
+				tween(shield, TI_SMOOTH, { BackgroundTransparency = 1 })
+				if lk then tween(lk, TI_SMOOTH, { ImageTransparency = 1 }) end
+				task.delay(0.34, function() if not locked and shield then shield.Visible = false end end)
 			end
 		end
 		if startLocked then setLocked(true) end
@@ -3751,7 +3804,7 @@ local function _constructWindow(Settings)
 
 		function Tab:CreateToggle(ToggleSettings)
 			ToggleSettings = ToggleSettings or {}
-			local card = makeCard(page,ToggleSettings.Name, ToggleSettings.Icon, 50)
+			local card, tLabel = makeCard(page,ToggleSettings.Name, ToggleSettings.Icon, 50)
 			descFor(card, ToggleSettings.Description)
 			tipFor(card, ToggleSettings.Tooltip)
 			hoverable(card)
@@ -3806,7 +3859,29 @@ local function _constructWindow(Settings)
 				Size = UDim2.fromScale(1,1),
 				Parent = card,
 			})
+
+			-- Locking a toggle hides the switch and reveals a lock glyph in its
+			-- place, all animated. Clicks are ignored while locked.
+			local lockIcon = makeIcon(card, "lock", 16, Theme.TextSub)
+			if lockIcon then
+				lockIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+				lockIcon.Position = UDim2.new(1, -15 - math.floor(GenStyle.toggleTrackW / 2), 0.5, 0)
+				lockIcon.ImageTransparency = 1
+			end
+			local locked = false
+			local function setLocked(state)
+				state = state and true or false
+				if state == locked then return end
+				locked = state
+				tween(track, TI_SMOOTH, { BackgroundTransparency = state and 1 or 0 })
+				tween(trackStroke, TI_SMOOTH, { Transparency = state and 1 or 0.84 })
+				tween(knob, TI_SMOOTH, { BackgroundTransparency = state and 1 or 0 })
+				if lockIcon then tween(lockIcon, TI_SMOOTH, { ImageTransparency = state and 0 or 1 }) end
+				if tLabel then tween(tLabel, TI_SMOOTH, { TextTransparency = state and 0.45 or 0 }) end
+			end
+
 			clicker.MouseButton1Click:Connect(function()
+				if locked then return end
 				Toggle.CurrentValue = not Toggle.CurrentValue
 				render(true)
 				runCallback(ToggleSettings.Callback, Toggle.CurrentValue)
@@ -3820,8 +3895,8 @@ local function _constructWindow(Settings)
 				saveConfiguration()
 			end
 
-			local setLocked = lockOverlay(card, ToggleSettings.Locked)
-			function Toggle:SetLocked(state) setLocked(state and true or false) end
+			function Toggle:SetLocked(state) setLocked(state) end
+			if ToggleSettings.Locked then setLocked(true) end
 
 			if ToggleSettings.Flag then
 				Toggle.Flag = ToggleSettings.Flag
@@ -5338,16 +5413,21 @@ local function _constructWindow(Settings)
 				return math.min(h, MAX_LIST)
 			end
 
+			local DROP_OPEN = TweenInfo.new(0.34, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out)
+			local DROP_CLOSE = TweenInfo.new(0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 			local function setOpen(value)
 				open = value
-				tween(chevron,TI_MED, {Rotation = open and 180 or 0})
+				tween(chevron, DROP_OPEN, {Rotation = open and 180 or 0})
 				if open then
 					listHolder.Visible = true
-					tween(listHolder, TI_MED, {Size = UDim2.new(1, 0, 0, visibleListHeight())})
+					-- slide the list down from a couple pixels up while it grows, for a softer reveal
+					listHolder.Position = UDim2.fromOffset(0, 52)
+					tween(listHolder, DROP_OPEN, {Position = UDim2.fromOffset(0, 56), Size = UDim2.new(1, 0, 0, visibleListHeight())})
 				else
-					local t = tween(listHolder, TI_MED, {Size = UDim2.new(1, 0, 0, 0)})
+					tween(listHolder, DROP_CLOSE, {Position = UDim2.fromOffset(0, 52)})
+					local t = tween(listHolder, DROP_CLOSE, {Size = UDim2.new(1, 0, 0, 0)})
 					t.Completed:Connect(function()
-						if not open then listHolder.Visible = false end
+						if not open then listHolder.Visible = false; listHolder.Position = UDim2.fromOffset(0, 56) end
 					end)
 					optionSearch.Text = ""
 				end
@@ -6691,62 +6771,137 @@ local function _constructWindow(Settings)
 		-- tag ([+] add, [-] remove, [~] change, [*] note).
 		function Tab:CreateChangelog(LogSettings)
 			LogSettings = LogSettings or {}
-			if LogSettings.Title then Tab:CreateSection(LogSettings.Title) end
 			local TAGS = {
-				["+"] = { color = Color3.fromRGB(88, 190, 128), sym = "+" },
-				["-"] = { color = Color3.fromRGB(224, 96, 96), sym = "-" },
-				["~"] = { color = Color3.fromRGB(240, 176, 74), sym = "~" },
-				["*"] = { color = Color3.fromRGB(96, 150, 236), sym = "*" },
+				["+"] = { color = Color3.fromRGB(96, 200, 140), word = "ADDED" },
+				["-"] = { color = Color3.fromRGB(228, 100, 100), word = "REMOVED" },
+				["~"] = { color = Color3.fromRGB(240, 176, 74), word = "CHANGED" },
+				["!"] = { color = Color3.fromRGB(120, 180, 250), word = "FIXED" },
+				["*"] = { color = Color3.fromRGB(150, 150, 158), word = "NOTE" },
 			}
-			for _, e in ipairs(LogSettings.Entries or {}) do
+
+			-- one cohesive release-notes panel
+			local card = create("Frame", {
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", (LogSettings.Title or "changelog"))
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+			padAll(card, 16, 18, 16, 18)
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 11),
+				Parent = card,
+			})
+
+			-- header row: title, optional version pill on the right
+			local head = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 22),
+				LayoutOrder = 1,
+				Parent = card,
+			})
+			local htitle = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, 0, 0.5, 0),
+				Size = UDim2.new(1, -80, 1, 0),
+				Font = FONT_BOLD,
+				TextSize = 17,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Text = LogSettings.Title or "Update Log",
+				Parent = head,
+			})
+			paint(htitle, "TextColor3", "TextTitle")
+			if LogSettings.Version then
+				local vpill = create("Frame", {
+					AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, 0, 0.5, 0),
+					AutomaticSize = Enum.AutomaticSize.X,
+					Size = UDim2.new(0, 0, 0, 20),
+					BackgroundColor3 = Theme.Accent,
+					BackgroundTransparency = 0.8,
+					Parent = head,
+				})
+				roundFull(vpill)
+				padAll(vpill, 0, 9, 0, 9)
+				local vl = create("TextLabel", {
+					BackgroundTransparency = 1,
+					AutomaticSize = Enum.AutomaticSize.X,
+					Size = UDim2.new(0, 0, 1, 0),
+					Font = FONT_BOLD,
+					TextSize = 12,
+					Text = tostring(LogSettings.Version),
+					TextColor3 = Theme.AccentSoft,
+					Parent = vpill,
+				})
+			end
+			create("Frame", {
+				Size = UDim2.new(1, 0, 0, 1),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				BackgroundTransparency = 0.9,
+				BorderSizePixel = 0,
+				LayoutOrder = 2,
+				Parent = card,
+			})
+
+			for i, e in ipairs(LogSettings.Entries or {}) do
 				local etype = (type(e) == "table" and (e.Type or e.Tag)) or "*"
 				local text = (type(e) == "table" and e.Text) or tostring(e)
 				local meta = TAGS[etype] or TAGS["*"]
-				local card = create("Frame", {
+				local word = (type(e) == "table" and e.Label) or meta.word
+
+				local row = create("Frame", {
+					BackgroundTransparency = 1,
 					AutomaticSize = Enum.AutomaticSize.Y,
-					Size = UDim2.new(1, 0, 0, 44),
-					LayoutOrder = nextOrder(),
-					Parent = page,
-				})
-				card:SetAttribute("SearchName", text)
-				paint(card, "BackgroundColor3", "Card")
-				cardBase(card)
-				hoverable(card)
-				local tag = create("Frame", {
-					AnchorPoint = Vector2.new(0, 0.5),
-					Position = UDim2.new(0, 14, 0.5, 0),
-					Size = UDim2.fromOffset(24, 24),
-					BackgroundColor3 = meta.color,
-					BackgroundTransparency = 0.82,
+					Size = UDim2.new(1, 0, 0, 20),
+					LayoutOrder = i + 2,
 					Parent = card,
 				})
-				round(tag, 7)
+				row:SetAttribute("SearchName", text)
+				-- colored word tag pill
+				local pill = create("Frame", {
+					AutomaticSize = Enum.AutomaticSize.X,
+					Position = UDim2.fromOffset(0, 1),
+					Size = UDim2.new(0, 0, 0, 19),
+					BackgroundColor3 = meta.color,
+					BackgroundTransparency = 0.84,
+					Parent = row,
+				})
+				roundFull(pill)
+				padAll(pill, 0, 9, 0, 9)
 				create("TextLabel", {
 					BackgroundTransparency = 1,
-					Size = UDim2.fromScale(1, 1),
+					AutomaticSize = Enum.AutomaticSize.X,
+					Size = UDim2.new(0, 0, 1, 0),
 					Font = FONT_BOLD,
-					TextSize = 16,
-					Text = meta.sym,
+					TextSize = 11,
+					Text = string.upper(tostring(word)),
 					TextColor3 = meta.color,
-					Parent = tag,
+					Parent = pill,
 				})
+				-- entry text, wraps beside the tag column
 				local lbl = create("TextLabel", {
 					BackgroundTransparency = 1,
-					AnchorPoint = Vector2.new(0, 0.5),
-					Position = UDim2.new(0, 50, 0.5, 0),
-					Size = UDim2.new(1, -66, 1, 0),
+					Position = UDim2.fromOffset(96, 0),
+					Size = UDim2.new(1, -96, 0, 0),
 					AutomaticSize = Enum.AutomaticSize.Y,
 					Font = FONT_MEDIUM,
-					TextSize = 15,
+					TextSize = 14,
+					LineHeight = 1.15,
 					TextXAlignment = Enum.TextXAlignment.Left,
-					TextYAlignment = Enum.TextYAlignment.Center,
+					TextYAlignment = Enum.TextYAlignment.Top,
 					TextWrapped = true,
 					Text = text,
-					Parent = card,
+					Parent = row,
 				})
 				paint(lbl, "TextColor3", "TextBody")
-				padAll(card, 10, 0, 10, 0)
 			end
+
 			local LogValue = {}
 			return LogValue
 		end

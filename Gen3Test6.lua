@@ -29,14 +29,13 @@ Home:CreateButton({
 	Icon = "message-square",
 	Callback = function()
 		Rayfield:Dialog({
-			Title = "Are you sure?",
-			Content = "This runs the risky action and cannot be undone.",
-			Icon = "triangle-alert",
+			Title = "Reset everything?",
+			Content = "This clears every saved value and puts the menu back to its defaults. You can't undo it.",
 			Options = {
-				{ Text = "Do it", Primary = true, Callback = function()
-					Rayfield:Notify({ Title = "Done", Content = "Action ran.", Duration = 3 })
-				end },
 				{ Text = "Cancel" },
+				{ Text = "Reset", Color = Color3.fromRGB(200, 70, 70), Callback = function()
+					Rayfield:Notify({ Title = "Reset", Content = "Everything was reset.", Duration = 3 })
+				end },
 			},
 		})
 	end,
@@ -52,9 +51,11 @@ Adv:CreateSlider({ Name = "Nested slider", Range = { 0, 100 }, Increment = 1, Cu
 -- Changelog
 Home:CreateChangelog({
 	Title = "Update Log",
+	Version = "v6",
 	Entries = {
-		{ Type = "+", Text = "Hold button, dialogs, collapsible sections" },
+		{ Type = "+", Text = "Hold button, dialogs, and collapsible sections" },
 		{ Type = "+", Text = "Preset color themes and custom fonts" },
+		{ Type = "!", Text = "Hold button fill now follows the rounded corners" },
 		{ Type = "~", Text = "Locked elements and dropdown upgrades" },
 		{ Type = "-", Text = "Removed the old shadow hack" },
 	},
