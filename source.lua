@@ -5191,18 +5191,27 @@ local function _constructWindow(Settings)
 				return text
 			end
 
-			local function render(animate)
+			local KNOB_W, KNOB_H = 30, 18
+			local DRAG_TI = TweenInfo.new(0.08, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+			-- Edge-aligned knob (anchor tracks the value) so it uses the full
+			-- track with no squeeze and never overflows the ends.
+			local function render(ti)
+				ti = ti or TweenInfo.new(0)
 				local alpha = 0
 				if range[2] ~= range[1] then
 					alpha = (Slider.CurrentValue - range[1]) / (range[2] - range[1])
 				end
-				alpha = math.clamp(alpha,0, 1)
-				local inset = 0.11
-				local shown = inset + alpha * (1 - 2 * inset)
-				local info = animate and TI_SMOOTH or TweenInfo.new(0)
-				tween(fill, info,{Size = UDim2.new(shown,0, 1, 0)})
-				tween(knob,info, {Position = UDim2.new(shown, 0, 0.5, 0)})
+				alpha = math.clamp(alpha, 0, 1)
+				tween(fill, ti, { Size = UDim2.new(alpha, 0, 1, 0) })
+				tween(knob, ti, { Position = UDim2.new(alpha, 0, 0.5, 0), AnchorPoint = Vector2.new(alpha, 0.5) })
 				valueLabel.Text = fmt(Slider.CurrentValue)
+			end
+
+			-- WindUI-style grab: while held, the pill grows and goes translucent
+			local function setDragging(state)
+				local ti = TweenInfo.new(state and 0.24 or 0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+				tween(knob, ti, { Size = UDim2.fromOffset(state and (KNOB_W + 8) or KNOB_W, state and (KNOB_H + 4) or KNOB_H) })
+				tween(pill, ti, { BackgroundTransparency = state and 0.5 or 0 })
 			end
 
 			local function setFromAlpha(alpha)
@@ -5211,23 +5220,30 @@ local function _constructWindow(Settings)
 				snapped = math.clamp(snapped, range[1], range[2])
 				if math.abs(snapped - Slider.CurrentValue) > 1e-9 then
 					Slider.CurrentValue = snapped
-					render(true)
-					runCallback(SliderSettings.Callback,snapped)
+					render(DRAG_TI)
+					runCallback(SliderSettings.Callback, snapped)
 					saveConfiguration()
 				end
 			end
 
 			local dragging = false
+			local function stopDrag()
+				if dragging then
+					dragging = false
+					setDragging(false)
+				end
+			end
 			hit.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					dragging = true
+					setDragging(true)
 					local alpha = (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
 					setFromAlpha(math.clamp(alpha, 0, 1))
 				end
 			end)
 			hit.InputEnded:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-					dragging = false
+					stopDrag()
 				end
 			end)
 			connect(UserInputService.InputChanged,function(input)
@@ -5237,16 +5253,16 @@ local function _constructWindow(Settings)
 				end
 			end)
 			connect(UserInputService.InputEnded, function(input)
-				if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
-					dragging = false
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					stopDrag()
 				end
 			end)
 
-			render(false)
+			render()
 
 			function Slider:Set(value)
 				Slider.CurrentValue = math.clamp(value, range[1], range[2])
-				render(true)
+				render(TI_SMOOTH)
 				runCallback(SliderSettings.Callback,Slider.CurrentValue)
 				saveConfiguration()
 			end
