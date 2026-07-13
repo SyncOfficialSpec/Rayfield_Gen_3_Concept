@@ -107,6 +107,90 @@ local Theme = {
 	NotifyBackground = rgb(16, 16,16),
 }
 
+-- Snapshot of the base palette. Theme/generation switches reset to this, then
+-- layer the generation's tint and the chosen color theme back on top (in place,
+-- so every closure that captured the Theme table keeps seeing live values).
+local BASE_THEME = {}
+for k, v in pairs(Theme) do BASE_THEME[k] = v end
+
+-- Build-time geometry/feel per generation. GenStyle holds the ACTIVE values and
+-- is read at construction; a generation switch rewrites it then rebuilds the UI.
+-- These are the Gen 3 (current concept) defaults.
+local GEN3_STYLE = {
+	windowCorner = 24,
+	cardRadius = 14,
+	cardGradient = true,   -- glassy top-to-bottom sheen on cards
+	cardStroke = false,    -- flat generations draw a 1px outline instead
+	glow = true,           -- radial bloom behind the tab dock + notifications
+	windowW = 530, windowH = 550,
+	toggleTrackW = 58, toggleTrackH = 26,
+	toggleKnobW = 28, toggleKnobH = 20,
+	fontKey = "builder",
+}
+local GenStyle = {}
+for k, v in pairs(GEN3_STYLE) do GenStyle[k] = v end
+
+-- Generations are faithful re-skins rendered by the one engine: a geometry
+-- override (style) plus a palette tint (theme) plus a font family.
+local GENERATIONS = {
+	Gen1 = {
+		label = "Gen 1", blurb = "Classic. Flatter cards, sharp corners, blue accent.",
+		style = {
+			windowCorner = 8, cardRadius = 6, cardGradient = false, cardStroke = true,
+			glow = false, windowW = 500, windowH = 560,
+			toggleTrackW = 46, toggleTrackH = 24, toggleKnobW = 18, toggleKnobH = 18,
+			fontKey = "gotham",
+		},
+		theme = {
+			Background = rgb(23, 24, 28), Card = rgb(32, 34, 40), CardHover = rgb(41, 43, 51),
+			CardSelected = rgb(49, 52, 62), CardInset = rgb(27, 28, 34), SearchBox = rgb(40, 42, 50),
+			Accent = rgb(86, 132, 236), AccentDark = rgb(50, 80, 150), AccentSoft = rgb(128, 168, 246),
+			ToggleTrack = rgb(19, 20, 24), KnobOff = rgb(70, 72, 80),
+		},
+	},
+	Gen2 = {
+		label = "Gen 2", blurb = "Fanmade. Rounded cards, deep dark, indigo accent.",
+		style = {
+			windowCorner = 18, cardRadius = 12, cardGradient = false, cardStroke = false,
+			glow = false, windowW = 520, windowH = 560,
+			toggleTrackW = 52, toggleTrackH = 28, toggleKnobW = 22, toggleKnobH = 22,
+			fontKey = "gotham",
+		},
+		theme = {
+			Background = rgb(15, 15, 18), Card = rgb(24, 24, 28), CardHover = rgb(32, 32, 37),
+			CardSelected = rgb(40, 40, 46), CardInset = rgb(19, 19, 23), SearchBox = rgb(34, 34, 40),
+			Accent = rgb(88, 116, 224), AccentDark = rgb(50, 68, 140), AccentSoft = rgb(128, 152, 240),
+			ToggleTrack = rgb(12, 12, 15), KnobOff = rgb(58, 60, 66),
+		},
+	},
+	Gen3 = {
+		label = "Gen 3", blurb = "Current concept. Glow, big radius, refined.",
+		style = GEN3_STYLE, theme = {},
+	},
+}
+local GEN_ORDER = {"Gen1", "Gen2", "Gen3"}
+
+-- Color themes layered on top of the active generation (mostly the accent).
+local THEMES = {
+	Default  = {},
+	Ocean    = { Accent = rgb(56, 140, 220), AccentDark = rgb(32, 84, 138), AccentSoft = rgb(98, 178, 244) },
+	Amber    = { Accent = rgb(240, 158, 58), AccentDark = rgb(150, 96, 30), AccentSoft = rgb(250, 190, 110) },
+	Rose     = { Accent = rgb(232, 88, 120), AccentDark = rgb(150, 48, 74), AccentSoft = rgb(246, 136, 162) },
+	Emerald  = { Accent = rgb(52, 196, 132), AccentDark = rgb(28, 118, 80), AccentSoft = rgb(120, 224, 176) },
+	Amethyst = { Accent = rgb(150, 110, 240), AccentDark = rgb(92, 64, 158), AccentSoft = rgb(186, 158, 250) },
+	Midnight = { Accent = rgb(96, 122, 208), AccentDark = rgb(52, 70, 128), AccentSoft = rgb(150, 172, 244),
+		Background = rgb(13, 14, 20), Card = rgb(22, 24, 32), CardHover = rgb(30, 32, 42),
+		CardSelected = rgb(38, 40, 52), CardInset = rgb(17, 18, 25) },
+}
+local THEME_ORDER = {"Default", "Ocean", "Amber", "Rose", "Emerald", "Amethyst", "Midnight"}
+
+-- Generation-switch engine state. The heavy functions are defined after the
+-- window constructor (which they rebuild); forward-declared here so the
+-- constructor's settings menu can call them.
+local GEN = { generation = "Gen3", theme = "Default", blueprint = nil, windowCell = nil, windowProxy = nil }
+local suppressCallbacks = false
+local applyStyle, performRebuild, applyFont
+
 local painted = {}
 
 local function paint(inst, prop, key)
@@ -212,6 +296,7 @@ local function glowColor(holder, color)
 end
 -- amount: 0 hidden, 1 fully shown (at each layer's base transparency)
 local function glowSet(holder, amount, ti)
+	if not GenStyle.glow then amount = 0 end
 	for _, ch in ipairs(holder:GetChildren()) do
 		if ch:IsA("ImageLabel") then
 			local base = ch:GetAttribute("BaseTransparency") or 0
@@ -228,14 +313,27 @@ end
 local FONT_REGULAR = Enum.Font.BuilderSans
 local FONT_MEDIUM = Enum.Font.BuilderSansMedium
 local FONT_BOLD = Enum.Font.BuilderSansBold
+
+local FONT_SETS
 do
-	local ok = pcall(function() return Enum.Font.BuilderSansMedium end)
-	if not ok then
-		FONT_REGULAR = Enum.Font.Gotham
-		FONT_MEDIUM = Enum.Font.GothamMedium
-		FONT_BOLD = Enum.Font.GothamBold
-	end
+	local builderOk = pcall(function() return Enum.Font.BuilderSansMedium end)
+	local builder = builderOk
+		and { Enum.Font.BuilderSans, Enum.Font.BuilderSansMedium, Enum.Font.BuilderSansBold }
+		or  { Enum.Font.Gotham, Enum.Font.GothamMedium, Enum.Font.GothamBold }
+	FONT_SETS = {
+		builder = builder,
+		gotham = { Enum.Font.Gotham, Enum.Font.GothamMedium, Enum.Font.GothamBold },
+		mono = { Enum.Font.Code, Enum.Font.Code, Enum.Font.Code },
+	}
 end
+
+-- Swaps the active font trio. Read at construction, so a generation/font switch
+-- takes effect on the next rebuild. Accepts a preset key or a custom Font trio.
+function applyFont(key)
+	local set = FONT_SETS[key or "builder"] or FONT_SETS.builder
+	FONT_REGULAR, FONT_MEDIUM, FONT_BOLD = set[1], set[2], set[3]
+end
+applyFont("builder")
 
 local TI_FAST=TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local TI_MED = TweenInfo.new(0.26, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
@@ -1148,7 +1246,7 @@ local function runKeySystem(Settings)
 	return passed
 end
 
-function RayfieldLibrary:CreateWindow(Settings)
+local function _constructWindow(Settings)
 	Settings = Settings or {}
 	ensureRoot()
 
@@ -1209,7 +1307,16 @@ function RayfieldLibrary:CreateWindow(Settings)
 		end
 	end)
 
-	local WINDOW_W, WINDOW_H = 530, 550
+	local WINDOW_W, WINDOW_H = GenStyle.windowW, GenStyle.windowH
+	if typeof(Settings.Size) == "UDim2" then
+		WINDOW_W = Settings.Size.X.Offset > 0 and Settings.Size.X.Offset or WINDOW_W
+		WINDOW_H = Settings.Size.Y.Offset > 0 and Settings.Size.Y.Offset or WINDOW_H
+	elseif type(Settings.Size) == "table" then
+		WINDOW_W = tonumber(Settings.Size[1]) or WINDOW_W
+		WINDOW_H = tonumber(Settings.Size[2]) or WINDOW_H
+	end
+	WINDOW_W = math.clamp(WINDOW_W, 360, 900)
+	WINDOW_H = math.clamp(WINDOW_H, 320, 760)
 	local HEADER_H = 76
 	local PILL_H = 62
 
@@ -1256,7 +1363,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 		Parent = root,
 	})
 	paint(window, "BackgroundColor3", "Background")
-	local windowCorner = round(window, 24)
+	local windowCorner = round(window, GenStyle.windowCorner)
 
 	local windowStroke=create("UIStroke",{Color = Color3.fromRGB(255, 255, 255), Transparency = 0.93, Thickness = 1, Parent = window})
 	create("UIGradient", {
@@ -1521,7 +1628,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 	})
 
 	local tabStyle = (Settings.TabStyle == "Accent") and "Accent" or "White"
-	local tabAccent = Settings.TabAccent or Color3.fromRGB(74, 178, 124)
+	local tabAccent = Settings.TabAccent or Theme.Accent
 	local function shade(c, f)
 		if f >= 0 then
 			return Color3.new(c.R + (1 - c.R) * f, c.G + (1 - c.G) * f, c.B + (1 - c.B) * f)
@@ -1865,6 +1972,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	local function runCallback(callback, ...)
 		if type(callback) ~= "function" then return end
+		if suppressCallbacks then return end
 		local ok, err = pcall(callback, ...)
 		if not ok then
 			warn("Rayfield Gen3 | Callback error: " .. tostring(err))
@@ -1873,12 +1981,23 @@ function RayfieldLibrary:CreateWindow(Settings)
 	end
 
 	local function cardBase(card)
-		round(card, 14)
-		create("UIGradient", {
-			Rotation = 90,
-			Color=ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(226, 226, 226)),
-			Parent = card,
-		})
+		round(card, GenStyle.cardRadius)
+		if GenStyle.cardGradient then
+			create("UIGradient", {
+				Rotation = 90,
+				Color=ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(226, 226, 226)),
+				Parent = card,
+			})
+		end
+		if GenStyle.cardStroke then
+			local st = create("UIStroke", {
+				Color = Color3.fromRGB(255, 255, 255),
+				Transparency = 0.9,
+				Thickness = 1,
+				Parent = card,
+			})
+			paint(st, "Color", "Stroke")
+		end
 	end
 
 	local function makeCard(page, name, icon, height)
@@ -3477,7 +3596,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 			local track = create("Frame", {
 				AnchorPoint=Vector2.new(1, 0.5),
 				Position = UDim2.new(1, -15, 0.5, 0),
-				Size = UDim2.fromOffset(58, 26),
+				Size = UDim2.fromOffset(GenStyle.toggleTrackW, GenStyle.toggleTrackH),
 			})
 			paint(track, "BackgroundColor3", "ToggleTrack")
 			roundFull(track)
@@ -3488,10 +3607,11 @@ function RayfieldLibrary:CreateWindow(Settings)
 			})
 			track.Parent = card
 
+			local knobOnX = -(GenStyle.toggleKnobW + 3)
 			local knob = create("Frame", {
 				AnchorPoint = Vector2.new(0, 0.5),
 				Position = UDim2.new(0, 3, 0.5, 0),
-				Size = UDim2.fromOffset(28, 20),
+				Size = UDim2.fromOffset(GenStyle.toggleKnobW, GenStyle.toggleKnobH),
 				BackgroundColor3 = Theme.KnobOff,
 			})
 			roundFull(knob)
@@ -3511,7 +3631,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 				local on = Toggle.CurrentValue
 				local info = animate and TweenInfo.new(0.3, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out) or TweenInfo.new(0)
 				tween(knob, info, {
-					Position = on and UDim2.new(1, -31, 0.5, 0) or UDim2.new(0, 3,0.5, 0),
+					Position = on and UDim2.new(1, knobOnX, 0.5, 0) or UDim2.new(0, 3,0.5, 0),
 					BackgroundColor3 = on and Theme.Accent or Theme.KnobOff,
 				})
 			end
@@ -3908,8 +4028,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 			roundFull(fill)
 			create("UIGradient", {
 				Color = ColorSequence.new({
-					ColorSequenceKeypoint.new(0, Color3.fromRGB(42, 88, 66)),
-					ColorSequenceKeypoint.new(1, Color3.fromRGB(74, 178, 124)),
+					ColorSequenceKeypoint.new(0, Theme.AccentDark),
+					ColorSequenceKeypoint.new(1, Theme.Accent),
 				}),
 				Parent = fill,
 			})
@@ -4717,8 +4837,8 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 			create("UIGradient", {
 				Color = ColorSequence.new({
-					ColorSequenceKeypoint.new(0, Color3.fromRGB(42, 88, 66)),
-					ColorSequenceKeypoint.new(1, Color3.fromRGB(74, 178, 124)),
+					ColorSequenceKeypoint.new(0, Theme.AccentDark),
+					ColorSequenceKeypoint.new(1, Theme.Accent),
 				}),
 				Parent = fill,
 			})
@@ -6378,6 +6498,62 @@ function RayfieldLibrary:CreateWindow(Settings)
 		local page, pageWrapper = buildPage()
 		settingsEntry = {Page = page, Wrapper = pageWrapper}
 		local SettingsTab = buildTabAPI(page)
+
+		SettingsTab:CreateSection("Generation")
+		local genLabels, labelToGen = {}, {}
+		for _, id in ipairs(GEN_ORDER) do
+			table.insert(genLabels, GENERATIONS[id].label)
+			labelToGen[GENERATIONS[id].label] = id
+		end
+		local pendingGen = GEN.generation
+		SettingsTab:CreateSegmentedPicker({
+			Name = "Generation",
+			Options = genLabels,
+			CurrentOption = GENERATIONS[GEN.generation].label,
+			Callback = function(opt)
+				pendingGen = labelToGen[opt] or GEN.generation
+			end,
+		})
+		SettingsTab:CreateParagraph({
+			Title = "Switch generation",
+			Content = "Pick a generation and press Apply. The menu unloads and reloads in that look, keeping every setting you changed. Your choice is remembered next time you run the script.",
+		})
+		SettingsTab:CreateButton({
+			Name = "Apply generation",
+			Icon = "refresh-cw",
+			Callback = function()
+				if pendingGen ~= GEN.generation then
+					task.spawn(function() RayfieldLibrary:SetGeneration(pendingGen) end)
+				end
+			end,
+		})
+
+		SettingsTab:CreateSection("Appearance")
+		SettingsTab:CreateDropdown({
+			Name = "Color theme",
+			Icon = "palette",
+			Options = THEME_ORDER,
+			CurrentOption = GEN.theme,
+			Callback = function(opt)
+				local name = type(opt) == "table" and opt[1] or opt
+				if name and name ~= GEN.theme then
+					task.spawn(function() RayfieldLibrary:SetTheme(name) end)
+				end
+			end,
+		})
+		local fontKeyToLabel = { builder = "Builder", gotham = "Gotham", mono = "Mono" }
+		SettingsTab:CreateDropdown({
+			Name = "Font",
+			Icon = "type",
+			Options = {"Auto", "Builder", "Gotham", "Mono"},
+			CurrentOption = GEN.fontOverride and (fontKeyToLabel[GEN.fontOverride] or "Auto") or "Auto",
+			Callback = function(opt)
+				local name = type(opt) == "table" and opt[1] or opt
+				local key = (name == "Auto" or not name) and nil or string.lower(name)
+				task.spawn(function() RayfieldLibrary:SetFont(key) end)
+			end,
+		})
+
 		SettingsTab:CreateSection("Interface")
 		SettingsTab:CreateKeybind({
 			Name = "Toggle UI",
@@ -6502,7 +6678,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 		task.wait(0.14)
 		pillContent.Visible = false
 		pillButton.Visible = false
-		tween(windowCorner, TI_MORPH, {CornerRadius = UDim.new(0,24)})
+		tween(windowCorner, TI_MORPH, {CornerRadius = UDim.new(0, GenStyle.windowCorner)})
 		tween(window, TI_MORPH, {Size = UDim2.fromOffset(WINDOW_W, minimized and HEADER_H or WINDOW_H)})
 		tween(window, TI_MORPH,{BackgroundColor3 = Theme.Background})
 		tween(windowStroke, TI_MORPH, {Transparency = 0.93})
@@ -6741,6 +6917,214 @@ function RayfieldLibrary:CreateWindow(Settings)
 
 	return Window
 end
+
+-- ===========================================================================
+-- Generation / theme engine
+-- The author builds the UI once; we record it as a blueprint of proxy handles.
+-- To switch generation (or theme or font) we snapshot every value, tear the
+-- window down, re-skin, rebuild the exact same blueprint, and restore values.
+-- The author's handles stay valid because each proxy forwards to whatever real
+-- object currently backs it.
+-- ===========================================================================
+
+local GEN_FILE = BASE_FOLDER .. "/generation.json"
+
+-- Compose the active look: reset to base, layer the generation tint, then the
+-- chosen color theme; swap geometry + font. Read at the next construction.
+function applyStyle()
+	local gen = GENERATIONS[GEN.generation] or GENERATIONS.Gen3
+	for k, v in pairs(GEN3_STYLE) do GenStyle[k] = v end
+	if gen.style then for k, v in pairs(gen.style) do GenStyle[k] = v end end
+	for k, v in pairs(BASE_THEME) do Theme[k] = v end
+	if gen.theme then for k, v in pairs(gen.theme) do Theme[k] = v end end
+	local th = THEMES[GEN.theme]
+	if th then for k, v in pairs(th) do Theme[k] = v end end
+	applyFont(GEN.fontOverride or GenStyle.fontKey)
+end
+
+local function persistChoice()
+	if not fsAvailable then return end
+	pcall(function()
+		mkfolder(BASE_FOLDER)
+		writef(GEN_FILE, HttpService:JSONEncode({
+			generation = GEN.generation, theme = GEN.theme, font = GEN.fontOverride,
+		}))
+	end)
+end
+
+local function loadPersistedChoice()
+	if not fsAvailable then return end
+	local raw = readf(GEN_FILE)
+	if not raw then return end
+	local ok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+	if ok and type(data) == "table" then
+		if GENERATIONS[data.generation] then GEN.generation = data.generation end
+		if data.theme and THEMES[data.theme] then GEN.theme = data.theme end
+		if data.font ~= nil then GEN.fontOverride = data.font end
+	end
+end
+
+-- A stable handle the author keeps. Its metatable forwards field reads/writes
+-- and method calls to whichever real object currently backs it (cell.real).
+-- Create* calls are recorded so the child can be rebuilt and re-pointed later.
+local function makeNode(realObj, record)
+	local cell = { real = realObj }
+	record.cell = cell
+	local proxy = {}
+	setmetatable(proxy, {
+		__index = function(_, key)
+			local real = cell.real
+			local v = real and real[key]
+			if type(v) ~= "function" then return v end
+			if type(key) == "string" and key:sub(1, 6) == "Create" then
+				return function(_, ...)
+					local r = cell.real
+					local args = table.pack(...)
+					local childReal = r[key](r, table.unpack(args, 1, args.n))
+					if type(childReal) ~= "table" then return childReal end
+					local childRec = { method = key, args = args, children = {} }
+					table.insert(record.children, childRec)
+					return makeNode(childReal, childRec)
+				end
+			end
+			return function(a, ...)
+				local r = cell.real
+				local f = r[key]
+				if a == proxy then return f(r, ...) end
+				return f(a, ...)
+			end
+		end,
+		__newindex = function(_, key, val)
+			local real = cell.real
+			if real then real[key] = val end
+		end,
+	})
+	return proxy
+end
+
+local function replayNode(realParent, record)
+	for _, child in ipairs(record.children) do
+		local ok, childReal = pcall(function()
+			return realParent[child.method](realParent, table.unpack(child.args, 1, child.args.n))
+		end)
+		if ok and type(childReal) == "table" then
+			child.cell.real = childReal
+			replayNode(childReal, child)
+		end
+	end
+end
+
+local VALUE_FIELD = {
+	Toggle = "CurrentValue", Checkbox = "CurrentValue", Slider = "CurrentValue",
+	Input = "CurrentValue", Dropdown = "CurrentOption", Keybind = "CurrentKeybind",
+	ColorPicker = "Color", GradientPicker = "Value",
+}
+
+local function snapshotValues(node)
+	for _, child in ipairs(node.children) do
+		local real = child.cell and child.cell.real
+		if type(real) == "table" and real.Type and VALUE_FIELD[real.Type] then
+			local val = real[VALUE_FIELD[real.Type]]
+			if type(val) == "table" then
+				local copy = {}
+				for i, x in ipairs(val) do copy[i] = x end
+				val = copy
+			end
+			child.savedValue = val
+		end
+		snapshotValues(child)
+	end
+end
+
+local function restoreValues(node)
+	for _, child in ipairs(node.children) do
+		if child.savedValue ~= nil then
+			local real = child.cell and child.cell.real
+			if type(real) == "table" and type(real.Set) == "function" then
+				pcall(function() real:Set(child.savedValue) end)
+			end
+		end
+		restoreValues(child)
+	end
+end
+
+local function teardownForRebuild()
+	for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
+	Connections = {}
+	if rootGui then pcall(function() rootGui:Destroy() end) end
+	rootGui = nil
+	notifyStack = nil
+	painted = {}
+	pendingIcons = {}
+	notifyOrder = 0
+	RayfieldLibrary.Flags = {}
+	RayfieldLibrary._hideWindow = nil
+	RayfieldLibrary._showWindow = nil
+	RayfieldLibrary._isHidden = nil
+	destroyed = false
+end
+
+function performRebuild()
+	local bp = GEN.blueprint
+	if not bp then applyStyle(); return end
+	suppressCallbacks = true
+	snapshotValues(bp)
+	teardownForRebuild()
+	applyStyle()
+	-- rebuild without re-running one-time entry gates or intro animations
+	local rebuildSettings = {}
+	for k, v in pairs(bp.settings) do rebuildSettings[k] = v end
+	rebuildSettings.KeySystem = nil
+	rebuildSettings.LoadingTitle = nil
+	rebuildSettings.LoadingSubtitle = nil
+	local realWindow = _constructWindow(rebuildSettings)
+	GEN.windowCell.real = realWindow
+	replayNode(realWindow, bp)
+	restoreValues(bp)
+	suppressCallbacks = false
+	persistChoice()
+end
+
+function RayfieldLibrary:CreateWindow(Settings)
+	Settings = Settings or {}
+	if Settings.Generation and GENERATIONS[Settings.Generation] then GEN.generation = Settings.Generation end
+	if Settings.Theme and THEMES[Settings.Theme] then GEN.theme = Settings.Theme end
+	if Settings.Font ~= nil then GEN.fontOverride = Settings.Font end
+	loadPersistedChoice()
+	applyStyle()
+	local record = { settings = Settings, children = {} }
+	GEN.blueprint = record
+	local realWindow = _constructWindow(Settings)
+	local proxy = makeNode(realWindow, record)
+	GEN.windowCell = record.cell
+	GEN.windowProxy = proxy
+	return proxy
+end
+
+function RayfieldLibrary:SetGeneration(gen)
+	if not GENERATIONS[gen] or gen == GEN.generation then return end
+	GEN.generation = gen
+	performRebuild()
+	local g = GENERATIONS[gen]
+	RayfieldLibrary:Notify({Title = "Switched to " .. (g.label or gen), Content = g.blurb or "", Duration = 4, Image = "layers"})
+end
+
+function RayfieldLibrary:SetTheme(name)
+	if not THEMES[name] or name == GEN.theme then return end
+	GEN.theme = name
+	performRebuild()
+	RayfieldLibrary:Notify({Title = "Theme: " .. name, Content = "Applied the " .. name .. " palette.", Duration = 3, Image = "palette"})
+end
+
+function RayfieldLibrary:SetFont(key)
+	GEN.fontOverride = key
+	performRebuild()
+end
+
+function RayfieldLibrary:GetGeneration() return GEN.generation end
+function RayfieldLibrary:GetTheme() return GEN.theme end
+function RayfieldLibrary:GetGenerationList() return GEN_ORDER end
+function RayfieldLibrary:GetThemeList() return THEME_ORDER end
 
 function RayfieldLibrary:IsVisible()
 	if RayfieldLibrary._isHidden then
