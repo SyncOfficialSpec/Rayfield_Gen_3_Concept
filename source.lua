@@ -193,6 +193,22 @@ local applyStyle, performRebuild, applyFont, persistChoice
 
 local painted = {}
 
+-- Surfaces (cards, the tab dock, etc.) that frost as the window transparency
+-- rises, so a see-through menu stays a cohesive glass sheet instead of solid
+-- panels floating. Each surface keeps its own base transparency and a factor
+-- for how strongly it fades.
+local glassSurfaces = {}
+local function glassValue(base, factor, t)
+	t = tonumber(t) or 0
+	return math.clamp(base + (1 - base) * t * factor, base, 0.97)
+end
+local function registerGlass(inst, base, factor)
+	base = base or 0
+	factor = factor or 0.6
+	table.insert(glassSurfaces, { inst = inst, base = base, factor = factor })
+	inst.BackgroundTransparency = glassValue(base, factor, GEN and GEN.transparency or 0)
+end
+
 local function paint(inst, prop, key)
 	inst[prop] = Theme[key]
 	table.insert(painted, {inst,prop, key})
@@ -1861,6 +1877,8 @@ local function _constructWindow(Settings)
 		Parent = tabBar,
 	})
 	roundFull(dockTrack)
+	-- the dock is decorative, so fade it strongly as the window turns glassy
+	registerGlass(dockTrack, 0.25, 1.15)
 	local dockIndicator = create("Frame", {
 		Position = UDim2.fromOffset(4, 4),
 		Size = UDim2.fromOffset(0, 36),
@@ -2191,6 +2209,7 @@ local function _constructWindow(Settings)
 
 	local function cardBase(card)
 		round(card, GenStyle.cardRadius)
+		registerGlass(card)
 		if GenStyle.cardGradient then
 			create("UIGradient", {
 				Rotation = 90,
@@ -5089,8 +5108,8 @@ local function _constructWindow(Settings)
 			})
 			paint(valueLabel, "TextColor3", "TextSub")
 
-			-- WindUI-style slider: a thin faint track, an accent fill, and a
-			-- white pill thumb with a soft shadow and a glass sheen.
+			-- Thin faint track, an accent fill, and a white pill thumb with a
+			-- soft shadow and a glass sheen.
 			local track
 			if compact then
 				track = create("Frame", {
@@ -5191,7 +5210,6 @@ local function _constructWindow(Settings)
 				return text
 			end
 
-			local KNOB_W, KNOB_H = 30, 18
 			local DRAG_TI = TweenInfo.new(0.08, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 			-- Edge-aligned knob (anchor tracks the value) so it uses the full
 			-- track with no squeeze and never overflows the ends.
@@ -5205,13 +5223,6 @@ local function _constructWindow(Settings)
 				tween(fill, ti, { Size = UDim2.new(alpha, 0, 1, 0) })
 				tween(knob, ti, { Position = UDim2.new(alpha, 0, 0.5, 0), AnchorPoint = Vector2.new(alpha, 0.5) })
 				valueLabel.Text = fmt(Slider.CurrentValue)
-			end
-
-			-- WindUI-style grab: while held, the pill grows and goes translucent
-			local function setDragging(state)
-				local ti = TweenInfo.new(state and 0.24 or 0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-				tween(knob, ti, { Size = UDim2.fromOffset(state and (KNOB_W + 8) or KNOB_W, state and (KNOB_H + 4) or KNOB_H) })
-				tween(pill, ti, { BackgroundTransparency = state and 0.5 or 0 })
 			end
 
 			local function setFromAlpha(alpha)
@@ -5228,15 +5239,11 @@ local function _constructWindow(Settings)
 
 			local dragging = false
 			local function stopDrag()
-				if dragging then
-					dragging = false
-					setDragging(false)
-				end
+				dragging = false
 			end
 			hit.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					dragging = true
-					setDragging(true)
 					local alpha = (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
 					setFromAlpha(math.clamp(alpha, 0, 1))
 				end
@@ -7435,11 +7442,17 @@ local function _constructWindow(Settings)
 		end
 	end
 
-	-- 0 = solid, up to ~0.9 = see-through window panel
+	-- 0 = solid, up to ~0.9 = see-through. The element cards frost with it so a
+	-- transparent menu stays a cohesive glass surface, not solid cards floating.
 	function Window:SetTransparency(value)
 		local t = math.clamp(tonumber(value) or 0, 0, 0.92)
 		GEN.transparency = t
 		window.BackgroundTransparency = t
+		for _, g in ipairs(glassSurfaces) do
+			if g.inst and g.inst.Parent then
+				g.inst.BackgroundTransparency = glassValue(g.base, g.factor, t)
+			end
+		end
 		persistChoice()
 	end
 
@@ -7777,6 +7790,7 @@ local function teardownForRebuild()
 	rootGui = nil
 	notifyStack = nil
 	painted = {}
+	glassSurfaces = {}
 	pendingIcons = {}
 	notifyOrder = 0
 	RayfieldLibrary.Flags = {}

@@ -2,7 +2,7 @@ local Rayfield = loadstring(game:HttpGet("https://raw.githubusercontent.com/Sync
 
 local Window = Rayfield:CreateWindow({
 	Name = "Gen3 Test7",
-	Subtitle = "Transparency, fonts, WindUI slider",
+	Subtitle = "Transparency, fonts, sliders",
 	Icon = "sparkles",
 	Badge = { Text = "phase 7", Icon = "flask-conical" },
 	TabStyle = "Accent",
@@ -12,7 +12,6 @@ local Window = Rayfield:CreateWindow({
 
 local Home = Window:CreateTab("Home", "house")
 
--- WindUI-style sliders: thin track, white pill thumb, grab grows + fades
 Home:CreateSection("Sliders")
 Home:CreateSlider({ Name = "Field of View", Icon = "eye", Range = { 70, 120 }, Increment = 1,
 	CurrentValue = 95, Suffix = "deg", Flag = "fov", Callback = function() end })
