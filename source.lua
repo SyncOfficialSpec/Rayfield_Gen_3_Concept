@@ -2193,6 +2193,38 @@ local function _constructWindow(Settings)
 		end)
 	end
 
+	-- Lockable element: an overlay that dims the card and swallows input.
+	-- Returns setLocked(state); locked?() via the closure.
+	local function lockOverlay(card, startLocked)
+		local shield
+		local function setLocked(state)
+			if state and not shield then
+				shield = create("TextButton", {
+					Name = "LockShield",
+					BackgroundColor3 = Theme.Background,
+					BackgroundTransparency = 0.5,
+					AutoButtonColor = false,
+					Text = "",
+					Size = UDim2.fromScale(1, 1),
+					ZIndex = 40,
+					Parent = card,
+				})
+				round(shield, GenStyle.cardRadius)
+				local lk = makeIcon(shield, "lock", 14, Theme.TextSub)
+				if lk then
+					lk.AnchorPoint = Vector2.new(1, 0.5)
+					lk.Position = UDim2.new(1, -14, 0.5, 0)
+					lk.ZIndex = 41
+				end
+			elseif not state and shield then
+				shield:Destroy()
+				shield = nil
+			end
+		end
+		if startLocked then setLocked(true) end
+		return setLocked
+	end
+
 	local tipLabel = nil
 	local tipOwner = nil
 	local function ensureTip()
@@ -3707,11 +3739,13 @@ local function _constructWindow(Settings)
 				end)
 				runCallback(ButtonSettings.Callback)
 			end)
+			local setLocked = lockOverlay(card, ButtonSettings.Locked)
 			local ButtonValue = {}
 			function ButtonValue:Set(newName)
 				label.Text = newName
 				card:SetAttribute("SearchName", newName or "")
 			end
+			function ButtonValue:SetLocked(state) setLocked(state and true or false) end
 			return ButtonValue
 		end
 
@@ -3785,6 +3819,9 @@ local function _constructWindow(Settings)
 				runCallback(ToggleSettings.Callback, Toggle.CurrentValue)
 				saveConfiguration()
 			end
+
+			local setLocked = lockOverlay(card, ToggleSettings.Locked)
+			function Toggle:SetLocked(state) setLocked(state and true or false) end
 
 			if ToggleSettings.Flag then
 				Toggle.Flag = ToggleSettings.Flag
@@ -5280,10 +5317,11 @@ local function _constructWindow(Settings)
 				return false
 			end
 
+			local placeholder = DropdownSettings.Placeholder or "None"
 			local function refreshCurrentLabel()
 				local n = #Dropdown.CurrentOption
 				if n == 0 then
-					currentLabel.Text = "None"
+					currentLabel.Text = placeholder
 				elseif n == 1 then
 					currentLabel.Text = tostring(Dropdown.CurrentOption[1])
 				else
@@ -5458,6 +5496,18 @@ local function _constructWindow(Settings)
 					tween(listHolder,TI_FAST,{Size = UDim2.new(1, 0, 0, visibleListHeight())})
 				end
 			end
+
+			-- Clear the selection so the dropdown shows its placeholder again.
+			function Dropdown:Reset()
+				Dropdown.CurrentOption = {}
+				renderRows()
+				refreshCurrentLabel()
+				runCallback(DropdownSettings.Callback, Dropdown.CurrentOption)
+				saveConfiguration()
+			end
+
+			local setLocked = lockOverlay(card, DropdownSettings.Locked)
+			function Dropdown:SetLocked(state) setLocked(state and true or false) end
 
 			if DropdownSettings.Flag then
 				Dropdown.Flag=DropdownSettings.Flag
@@ -6792,8 +6842,15 @@ local function _constructWindow(Settings)
 		table.insert(tabs, tabEntry)
 
 		pill.MouseButton1Click:Connect(function()
+			if tabEntry.Locked then return end
 			selectTab(tabEntry)
 		end)
+		function Tab:SetLocked(state)
+			tabEntry.Locked = state and true or false
+			local t = tabEntry.Locked and 0.6 or 0
+			if pillLabel then pillLabel.TextTransparency = t end
+			if pillIcon then pillIcon.ImageTransparency = t end
+		end
 		pill:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
 			if currentTab == tabEntry and not settingsOpen then
 				moveIndicator(false)
