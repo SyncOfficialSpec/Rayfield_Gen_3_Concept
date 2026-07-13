@@ -940,6 +940,135 @@ function RayfieldLibrary:Notify(data)
 	end)
 end
 
+-- Centered modal dialog. Use for confirmations ("Are you sure?") and for a
+-- Terms/agreement gate the user must accept before continuing.
+--   Rayfield:Dialog({ Title=, Content=, Options={ {Text=, Primary=, Callback=} } })
+function RayfieldLibrary:Dialog(data)
+	data = data or {}
+	ensureRoot()
+	local options = data.Options
+	if type(options) ~= "table" or #options == 0 then
+		options = { { Text = data.AcceptText or "OK" } }
+	end
+
+	local overlay = create("Frame", {
+		Name = "Dialog",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+		BackgroundTransparency = 1,
+		ZIndex = 500,
+		Parent = rootGui,
+	})
+	local block = create("TextButton", {
+		BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), ZIndex = 500, Parent = overlay,
+	})
+
+	local card = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(400, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		ZIndex = 501,
+		Parent = overlay,
+	})
+	paint(card, "BackgroundColor3", "Background")
+	round(card, math.max(14, GenStyle.cardRadius))
+	create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = card })
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Vertical,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 12),
+		Parent = card,
+	})
+	padAll(card, 22, 22, 20, 22)
+
+	if data.Icon then
+		local ic = makeIcon(card, data.Icon, 26, Theme.TextTitle)
+		if ic then ic.LayoutOrder = 0 end
+	end
+	local title = create("TextLabel", {
+		BackgroundTransparency = 1,
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Size = UDim2.new(1, 0, 0, 0),
+		Font = FONT_BOLD, TextSize = 20,
+		TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+		Text = data.Title or "Are you sure?",
+		LayoutOrder = 1, ZIndex = 501, Parent = card,
+	})
+	paint(title, "TextColor3", "TextTitle")
+	if data.Content and data.Content ~= "" then
+		local body = create("TextLabel", {
+			BackgroundTransparency = 1,
+			AutomaticSize = Enum.AutomaticSize.Y,
+			Size = UDim2.new(1, 0, 0, 0),
+			Font = FONT_MEDIUM, TextSize = 15,
+			TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+			Text = data.Content,
+			LayoutOrder = 2, ZIndex = 501, Parent = card,
+		})
+		paint(body, "TextColor3", "TextSub")
+	end
+
+	local row = create("Frame", {
+		BackgroundTransparency = 1,
+		AutomaticSize = Enum.AutomaticSize.Y,
+		Size = UDim2.new(1, 0, 0, 40),
+		LayoutOrder = 3, ZIndex = 501, Parent = card,
+	})
+	create("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		Padding = UDim.new(0, 8),
+		Parent = row,
+	})
+
+	local closed = false
+	local function close()
+		if closed then return end
+		closed = true
+		tween(overlay, TI_FAST, { BackgroundTransparency = 1 })
+		tween(card, TI_FAST, { Position = UDim2.new(0.5, 0, 0.5, 12) })
+		task.delay(0.16, function() overlay:Destroy() end)
+	end
+
+	for i, opt in ipairs(options) do
+		local btn = create("TextButton", {
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.new(0, 0, 0, 36),
+			Text = "",
+			BackgroundColor3 = opt.Primary and Theme.Accent or Theme.Card,
+			LayoutOrder = i, ZIndex = 502, Parent = row,
+		})
+		round(btn, math.max(8, GenStyle.cardRadius - 4))
+		padAll(btn, 0, 18, 0, 18)
+		local bl = create("TextLabel", {
+			BackgroundTransparency = 1,
+			AutomaticSize = Enum.AutomaticSize.X,
+			Size = UDim2.new(0, 0, 1, 0),
+			Font = FONT_BOLD, TextSize = 15,
+			Text = opt.Text or "OK",
+			TextColor3 = opt.Primary and Color3.fromRGB(20, 20, 20) or Theme.TextBody,
+			ZIndex = 502, Parent = btn,
+		})
+		btn.MouseButton1Click:Connect(function()
+			close()
+			if type(opt.Callback) == "function" then
+				task.spawn(function()
+					local ok, err = pcall(opt.Callback)
+					if not ok then warn("Rayfield Gen3 | Dialog callback error: " .. tostring(err)) end
+				end)
+			end
+		end)
+	end
+
+	card.Position = UDim2.new(0.5, 0, 0.5, 12)
+	tween(overlay, TI_MED, { BackgroundTransparency = 0.45 })
+	tween(card, TI_SMOOTH, { Position = UDim2.fromScale(0.5, 0.5) })
+	return { Close = close }
+end
+
 local function showAccountToast()
 	if not LocalPlayer then return end
 	ensureRoot()
@@ -6403,6 +6532,208 @@ local function _constructWindow(Settings)
 			return table.unpack(apis)
 		end
 
+		-- Hold-to-confirm button: fill sweeps across while held; fires only if
+		-- held the full duration. Safer than a tap for risky actions.
+		function Tab:CreateHoldButton(HoldSettings)
+			HoldSettings = HoldSettings or {}
+			local duration = math.clamp(tonumber(HoldSettings.Duration) or 1.5, 0.2, 10)
+			local card, label = makeCard(page, HoldSettings.Name, HoldSettings.Icon, 50)
+			descFor(card, HoldSettings.Description or "Press and hold to confirm.")
+			tipFor(card, HoldSettings.Tooltip)
+			hoverable(card)
+
+			local fillClip = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				ClipsDescendants = true,
+				ZIndex = 0,
+				Parent = card,
+			})
+			round(fillClip, GenStyle.cardRadius)
+			local fill = create("Frame", {
+				BackgroundColor3 = Theme.Accent,
+				BackgroundTransparency = 0.55,
+				BorderSizePixel = 0,
+				Size = UDim2.new(0, 0, 1, 0),
+				ZIndex = 0,
+				Parent = fillClip,
+			})
+			if label then label.ZIndex = 2 end
+
+			local clicker = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 3,
+				Parent = card,
+			})
+
+			local holding, token = false, 0
+			local function reset(animate)
+				tween(fill, animate and TI_MED or TweenInfo.new(0), {Size = UDim2.new(0, 0, 1, 0), BackgroundTransparency = 0.55})
+			end
+			clicker.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					holding = true
+					token += 1
+					local myToken = token
+					tween(fill, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Size = UDim2.fromScale(1, 1)})
+					task.delay(duration, function()
+						if holding and myToken == token then
+							holding = false
+							tween(fill, TI_FAST, {BackgroundTransparency = 0.2})
+							task.delay(0.14, function() reset(true) end)
+							runCallback(HoldSettings.Callback)
+						end
+					end)
+				end
+			end)
+			local function releaseInput(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					if holding then
+						holding = false
+						token += 1
+						reset(true)
+					end
+				end
+			end
+			clicker.InputEnded:Connect(releaseInput)
+			clicker.MouseLeave:Connect(function()
+				if holding then holding = false; token += 1; reset(true) end
+			end)
+
+			local HoldValue = {}
+			function HoldValue:Set(newName) label.Text = newName; card:SetAttribute("SearchName", newName or "") end
+			return HoldValue
+		end
+
+		-- Changelog / update log: a titled list of entries, each with a colored
+		-- tag ([+] add, [-] remove, [~] change, [*] note).
+		function Tab:CreateChangelog(LogSettings)
+			LogSettings = LogSettings or {}
+			if LogSettings.Title then Tab:CreateSection(LogSettings.Title) end
+			local TAGS = {
+				["+"] = { color = Color3.fromRGB(88, 190, 128), sym = "+" },
+				["-"] = { color = Color3.fromRGB(224, 96, 96), sym = "-" },
+				["~"] = { color = Color3.fromRGB(240, 176, 74), sym = "~" },
+				["*"] = { color = Color3.fromRGB(96, 150, 236), sym = "*" },
+			}
+			for _, e in ipairs(LogSettings.Entries or {}) do
+				local etype = (type(e) == "table" and (e.Type or e.Tag)) or "*"
+				local text = (type(e) == "table" and e.Text) or tostring(e)
+				local meta = TAGS[etype] or TAGS["*"]
+				local card = create("Frame", {
+					AutomaticSize = Enum.AutomaticSize.Y,
+					Size = UDim2.new(1, 0, 0, 44),
+					LayoutOrder = nextOrder(),
+					Parent = page,
+				})
+				card:SetAttribute("SearchName", text)
+				paint(card, "BackgroundColor3", "Card")
+				cardBase(card)
+				hoverable(card)
+				local tag = create("Frame", {
+					AnchorPoint = Vector2.new(0, 0.5),
+					Position = UDim2.new(0, 14, 0.5, 0),
+					Size = UDim2.fromOffset(24, 24),
+					BackgroundColor3 = meta.color,
+					BackgroundTransparency = 0.82,
+					Parent = card,
+				})
+				round(tag, 7)
+				create("TextLabel", {
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Font = FONT_BOLD,
+					TextSize = 16,
+					Text = meta.sym,
+					TextColor3 = meta.color,
+					Parent = tag,
+				})
+				local lbl = create("TextLabel", {
+					BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(0, 0.5),
+					Position = UDim2.new(0, 50, 0.5, 0),
+					Size = UDim2.new(1, -66, 1, 0),
+					AutomaticSize = Enum.AutomaticSize.Y,
+					Font = FONT_MEDIUM,
+					TextSize = 15,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Center,
+					TextWrapped = true,
+					Text = text,
+					Parent = card,
+				})
+				paint(lbl, "TextColor3", "TextBody")
+				padAll(card, 10, 0, 10, 0)
+			end
+			local LogValue = {}
+			return LogValue
+		end
+
+		-- Collapsible section: a clickable header that folds a container of
+		-- elements. Returns a Tab-like API you add elements into.
+		function Tab:CreateCollapsibleSection(SectionSettings)
+			SectionSettings = SectionSettings or {}
+			local name = SectionSettings.Name or SectionSettings.Title or "Section"
+			local open = SectionSettings.Open ~= false
+
+			local header, hlabel = makeCard(page, name, SectionSettings.Icon, 42)
+			header.BackgroundTransparency = 0.4
+			if hlabel then hlabel.Font = FONT_BOLD end
+			hoverable(header)
+			local chevron = create("ImageLabel", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -14, 0.5, 0),
+				Size = UDim2.fromOffset(16, 16),
+				ImageColor3 = Theme.TextSub,
+				Parent = header,
+			})
+			applyLucide(chevron, {"chevron-down"})
+			local hclick = create("TextButton", {
+				BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), Parent = header,
+			})
+
+			local content = create("Frame", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			content:SetAttribute("Composite", true)
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 8),
+				Parent = content,
+			})
+
+			local function apply(animate)
+				if open then
+					content.Visible = true
+					content.AutomaticSize = Enum.AutomaticSize.Y
+				else
+					content.AutomaticSize = Enum.AutomaticSize.None
+					content.Size = UDim2.new(1, 0, 0, 0)
+					content.Visible = false
+				end
+				tween(chevron, animate and TI_MED or TweenInfo.new(0), {Rotation = open and 0 or -90})
+			end
+			apply(false)
+			hclick.MouseButton1Click:Connect(function()
+				open = not open
+				apply(true)
+			end)
+
+			local api = buildTabAPI(content, false)
+			function api:SetOpen(state) open = state and true or false; apply(true) end
+			function api:Toggle() open = not open; apply(true) end
+			function api:IsOpen() return open end
+			return api
+		end
+
 		return Tab
 	end
 
@@ -6965,51 +7296,67 @@ local function loadPersistedChoice()
 end
 
 -- A stable handle the author keeps. Its metatable forwards field reads/writes
--- and method calls to whichever real object currently backs it (cell.real).
--- Create* calls are recorded so the child can be rebuilt and re-pointed later.
-local function makeNode(realObj, record)
-	local cell = { real = realObj }
-	record.cell = cell
+-- and method calls to whichever real object currently backs it (node.cell.real).
+-- Create* calls are recorded (with every returned value, so multi-return
+-- factories like CreateColumns work) so children can be rebuilt and re-pointed.
+local function makeNode(real, node)
+	node.cell = { real = real }
+	node.children = node.children or {}
 	local proxy = {}
 	setmetatable(proxy, {
 		__index = function(_, key)
-			local real = cell.real
-			local v = real and real[key]
+			local r = node.cell.real
+			local v = r and r[key]
 			if type(v) ~= "function" then return v end
 			if type(key) == "string" and key:sub(1, 6) == "Create" then
 				return function(_, ...)
-					local r = cell.real
+					local rr = node.cell.real
 					local args = table.pack(...)
-					local childReal = r[key](r, table.unpack(args, 1, args.n))
-					if type(childReal) ~= "table" then return childReal end
-					local childRec = { method = key, args = args, children = {} }
-					table.insert(record.children, childRec)
-					return makeNode(childReal, childRec)
+					local rets = table.pack(rr[key](rr, table.unpack(args, 1, args.n)))
+					local crec = { method = key, args = args, nodes = {} }
+					table.insert(node.children, crec)
+					local out = {}
+					for i = 1, rets.n do
+						local rv = rets[i]
+						if type(rv) == "table" then
+							local child = { children = {} }
+							crec.nodes[i] = child
+							out[i] = makeNode(rv, child)
+						else
+							out[i] = rv
+						end
+					end
+					return table.unpack(out, 1, rets.n)
 				end
 			end
 			return function(a, ...)
-				local r = cell.real
-				local f = r[key]
-				if a == proxy then return f(r, ...) end
+				local rr = node.cell.real
+				local f = rr[key]
+				if a == proxy then return f(rr, ...) end
 				return f(a, ...)
 			end
 		end,
 		__newindex = function(_, key, val)
-			local real = cell.real
-			if real then real[key] = val end
+			local r = node.cell.real
+			if r then r[key] = val end
 		end,
 	})
 	return proxy
 end
 
-local function replayNode(realParent, record)
-	for _, child in ipairs(record.children) do
-		local ok, childReal = pcall(function()
-			return realParent[child.method](realParent, table.unpack(child.args, 1, child.args.n))
+local function replayNode(realParent, node)
+	for _, crec in ipairs(node.children) do
+		local ok, rets = pcall(function()
+			return table.pack(realParent[crec.method](realParent, table.unpack(crec.args, 1, crec.args.n)))
 		end)
-		if ok and type(childReal) == "table" then
-			child.cell.real = childReal
-			replayNode(childReal, child)
+		if ok and rets then
+			for i, child in pairs(crec.nodes) do
+				local rv = rets[i]
+				if type(rv) == "table" then
+					child.cell.real = rv
+					replayNode(rv, child)
+				end
+			end
 		end
 	end
 end
@@ -7020,8 +7367,17 @@ local VALUE_FIELD = {
 	ColorPicker = "Color", GradientPicker = "Value",
 }
 
+local function walkNodes(node, fn)
+	for _, crec in ipairs(node.children) do
+		for _, child in pairs(crec.nodes) do
+			fn(child)
+			walkNodes(child, fn)
+		end
+	end
+end
+
 local function snapshotValues(node)
-	for _, child in ipairs(node.children) do
+	walkNodes(node, function(child)
 		local real = child.cell and child.cell.real
 		if type(real) == "table" and real.Type and VALUE_FIELD[real.Type] then
 			local val = real[VALUE_FIELD[real.Type]]
@@ -7032,20 +7388,18 @@ local function snapshotValues(node)
 			end
 			child.savedValue = val
 		end
-		snapshotValues(child)
-	end
+	end)
 end
 
 local function restoreValues(node)
-	for _, child in ipairs(node.children) do
+	walkNodes(node, function(child)
 		if child.savedValue ~= nil then
 			local real = child.cell and child.cell.real
 			if type(real) == "table" and type(real.Set) == "function" then
 				pcall(function() real:Set(child.savedValue) end)
 			end
 		end
-		restoreValues(child)
-	end
+	end)
 end
 
 local function teardownForRebuild()
