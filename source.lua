@@ -5,6 +5,8 @@ local TextService=game:GetService("TextService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
 
 local LocalPlayer=Players.LocalPlayer
 
@@ -187,7 +189,7 @@ local THEME_ORDER = {"Default", "Ocean", "Amber", "Rose", "Emerald", "Amethyst",
 -- Generation-switch engine state. The heavy functions are defined after the
 -- window constructor (which they rebuild); forward-declared here so the
 -- constructor's settings menu can call them.
-local GEN = { generation = "Gen3", theme = "Default", transparency = 0, blueprint = nil, windowCell = nil, windowProxy = nil }
+local GEN = { generation = "Gen3", theme = "Default", transparency = 0, acrylic = false, blueprint = nil, windowCell = nil, windowProxy = nil }
 local suppressCallbacks = false
 local applyStyle, performRebuild, applyFont, persistChoice
 
@@ -207,6 +209,86 @@ local function registerGlass(inst, base, factor)
 	factor = factor or 0.6
 	table.insert(glassSurfaces, { inst = inst, base = base, factor = factor })
 	inst.BackgroundTransparency = glassValue(base, factor, GEN and GEN.transparency or 0)
+end
+
+-- Acrylic blur: a near-plane Glass part covering the window's screen region plus
+-- a near DepthOfField, so the game behind a see-through window reads as frosted
+-- glass. Technique adapted from ImInsane-1337/neverlose-ui (our root ScreenGui
+-- ignores the GUI inset, so we project with ViewportPointToRay).
+local acrylicCleanup = nil
+local function clearAcrylic()
+	if acrylicCleanup then
+		local fn = acrylicCleanup
+		acrylicCleanup = nil
+		pcall(fn)
+	end
+end
+local function enableAcrylic(windowFrame)
+	clearAcrylic()
+	local camera = Workspace.CurrentCamera
+	if not camera or not windowFrame then return end
+
+	local part = Instance.new("Part")
+	part.Name = "RayfieldAcrylic"
+	part.Material = Enum.Material.Glass
+	part.Transparency = 0.98
+	part.Reflectance = 1
+	part.CastShadow = false
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CanTouch = false
+	part.Locked = true
+	part.Size = Vector3.new(0.01, 0.01, 0.01)
+	part.Color = Color3.fromRGB(0, 0, 0)
+	local mesh = Instance.new("BlockMesh")
+	mesh.Parent = part
+	part.Parent = camera
+
+	local dof = Instance.new("DepthOfFieldEffect")
+	dof.Enabled = true
+	dof.FarIntensity = 0
+	dof.FocusDistance = 0
+	dof.InFocusRadius = 1000
+	dof.NearIntensity = 1
+	dof.Parent = Lighting
+
+	local function planeHit(planePos, normal, origin, dir)
+		local v = origin - planePos
+		local num = normal.X * v.X + normal.Y * v.Y + normal.Z * v.Z
+		local den = normal.X * dir.X + normal.Y * dir.Y + normal.Z * dir.Z
+		return origin + (-num / den) * dir
+	end
+
+	local conn = RunService.RenderStepped:Connect(function()
+		local cam = Workspace.CurrentCamera
+		if not cam or not windowFrame.Parent then return end
+		if part.Parent ~= cam then part.Parent = cam end
+		if not windowFrame.Visible then
+			mesh.Offset = Vector3.zero
+			mesh.Scale = Vector3.zero
+			return
+		end
+		local c0 = windowFrame.AbsolutePosition
+		local c1 = c0 + windowFrame.AbsoluteSize
+		local r0 = cam:ViewportPointToRay(c0.X, c0.Y, 1)
+		local r1 = cam:ViewportPointToRay(c1.X, c1.Y, 1)
+		local origin = cam.CFrame.Position + cam.CFrame.LookVector * (0.05 - cam.NearPlaneZ)
+		local normal = cam.CFrame.LookVector
+		local p0 = planeHit(origin, normal, r0.Origin, r0.Direction)
+		local p1 = planeHit(origin, normal, r1.Origin, r1.Direction)
+		p0 = cam.CFrame:PointToObjectSpace(p0)
+		p1 = cam.CFrame:PointToObjectSpace(p1)
+		mesh.Offset = (p0 + p1) / 2
+		mesh.Scale = (p1 - p0) / 0.0101
+		part.CFrame = cam.CFrame
+	end)
+
+	acrylicCleanup = function()
+		pcall(function() conn:Disconnect() end)
+		pcall(function() part:Destroy() end)
+		pcall(function() dof:Destroy() end)
+	end
 end
 
 local function paint(inst, prop, key)
@@ -1588,6 +1670,7 @@ local function _constructWindow(Settings)
 	})
 	paint(window, "BackgroundColor3", "Background")
 	window.BackgroundTransparency = GEN.transparency
+	if GEN.acrylic then enableAcrylic(window) end
 	local windowCorner = round(window, GenStyle.windowCorner)
 
 	local windowStroke=create("UIStroke",{Color = Color3.fromRGB(255, 255, 255), Transparency = 0.93, Thickness = 1, Parent = window})
@@ -7249,6 +7332,15 @@ local function _constructWindow(Settings)
 				Window:SetTransparency(v / 100)
 			end,
 		})
+		SettingsTab:CreateToggle({
+			Name = "Acrylic blur",
+			Icon = "sparkles",
+			Description = "Frost the game behind a see-through window.",
+			CurrentValue = GEN.acrylic,
+			Callback = function(state)
+				Window:SetAcrylic(state)
+			end,
+		})
 
 		SettingsTab:CreateSection("Interface")
 		SettingsTab:CreateKeybind({
@@ -7456,6 +7548,18 @@ local function _constructWindow(Settings)
 		persistChoice()
 	end
 
+	-- Frosted-glass blur of the game behind the (see-through) window
+	function Window:SetAcrylic(state)
+		GEN.acrylic = state and true or false
+		if GEN.acrylic then
+			enableAcrylic(window)
+			if GEN.transparency < 0.2 then Window:SetTransparency(0.4) end
+		else
+			clearAcrylic()
+		end
+		persistChoice()
+	end
+
 	function Window:Greet(GreetSettings)
 		GreetSettings = GreetSettings or {}
 		local texts = GreetSettings.Texts or {
@@ -7658,7 +7762,7 @@ function persistChoice()
 		mkfolder(BASE_FOLDER)
 		writef(GEN_FILE, HttpService:JSONEncode({
 			generation = GEN.generation, theme = GEN.theme, font = GEN.fontOverride,
-			transparency = GEN.transparency,
+			transparency = GEN.transparency, acrylic = GEN.acrylic,
 		}))
 	end)
 end
@@ -7673,6 +7777,7 @@ local function loadPersistedChoice()
 		if data.theme and THEMES[data.theme] then GEN.theme = data.theme end
 		if data.font ~= nil then GEN.fontOverride = data.font end
 		if type(data.transparency) == "number" then GEN.transparency = math.clamp(data.transparency, 0, 0.92) end
+		if type(data.acrylic) == "boolean" then GEN.acrylic = data.acrylic end
 	end
 end
 
@@ -7789,6 +7894,7 @@ local function teardownForRebuild()
 	if rootGui then pcall(function() rootGui:Destroy() end) end
 	rootGui = nil
 	notifyStack = nil
+	clearAcrylic()
 	painted = {}
 	glassSurfaces = {}
 	pendingIcons = {}
@@ -7827,6 +7933,10 @@ function RayfieldLibrary:CreateWindow(Settings)
 	if Settings.Theme and THEMES[Settings.Theme] then GEN.theme = Settings.Theme end
 	if Settings.Font ~= nil then GEN.fontOverride = Settings.Font end
 	if type(Settings.Transparency) == "number" then GEN.transparency = math.clamp(Settings.Transparency, 0, 0.92) end
+	if Settings.Acrylic ~= nil then
+		GEN.acrylic = Settings.Acrylic and true or false
+		if GEN.acrylic and GEN.transparency < 0.2 then GEN.transparency = 0.4 end
+	end
 	loadPersistedChoice()
 	applyStyle()
 	local record = { settings = Settings, children = {} }
@@ -7881,6 +7991,7 @@ end
 
 function RayfieldLibrary:Destroy()
 	destroyed = true
+	clearAcrylic()
 	for _, c in ipairs(Connections) do
 		pcall(function() c:Disconnect() end)
 	end

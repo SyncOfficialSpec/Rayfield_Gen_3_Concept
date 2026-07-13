@@ -6,7 +6,8 @@ local Window = Rayfield:CreateWindow({
 	Icon = "sparkles",
 	Badge = { Text = "phase 7", Icon = "flask-conical" },
 	TabStyle = "Accent",
-	Transparency = 0.25, -- glassy window; adjust live in the gear settings
+	Transparency = 0.4, -- glassy window; adjust live in the gear settings
+	Acrylic = true, -- frosted-glass blur of the game behind the window
 	ConfigurationSaving = { Enabled = true, FolderName = "Gen3Test7", FileName = "cfg" },
 })
 
@@ -24,13 +25,14 @@ Home:CreateSection("Text input")
 Home:CreateInput({ Name = "Nickname", PlaceholderText = "type here", CurrentValue = "",
 	Flag = "nick", Callback = function() end })
 
-Home:CreateSection("Window transparency")
+Home:CreateSection("Transparency and blur")
 Home:CreateParagraph({
 	Title = "Try it",
-	Content = "Open the gear (top right). Drag Window transparency to see the panel go glassy, and open the Font picker to search every Roblox font. Or use the buttons below.",
+	Content = "The window loads glassy with acrylic blur on, so the game behind it is frosted. Open the gear to drag the transparency, toggle Acrylic blur, and search every Roblox font.",
 })
-Home:CreateButton({ Name = "More transparent", Icon = "eye", Callback = function() Window:SetTransparency(0.5) end })
-Home:CreateButton({ Name = "Solid window", Icon = "eye-off", Callback = function() Window:SetTransparency(0) end })
+Home:CreateToggle({ Name = "Acrylic blur", Icon = "sparkles", CurrentValue = true, Callback = function(s) Window:SetAcrylic(s) end })
+Home:CreateButton({ Name = "More transparent", Icon = "eye", Callback = function() Window:SetTransparency(0.6) end })
+Home:CreateButton({ Name = "Less transparent", Icon = "eye-off", Callback = function() Window:SetTransparency(0.25) end })
 
 Rayfield:LoadConfiguration()
 Rayfield:Notify({
