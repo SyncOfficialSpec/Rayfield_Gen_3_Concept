@@ -187,9 +187,9 @@ local THEME_ORDER = {"Default", "Ocean", "Amber", "Rose", "Emerald", "Amethyst",
 -- Generation-switch engine state. The heavy functions are defined after the
 -- window constructor (which they rebuild); forward-declared here so the
 -- constructor's settings menu can call them.
-local GEN = { generation = "Gen3", theme = "Default", blueprint = nil, windowCell = nil, windowProxy = nil }
+local GEN = { generation = "Gen3", theme = "Default", transparency = 0, blueprint = nil, windowCell = nil, windowProxy = nil }
 local suppressCallbacks = false
-local applyStyle, performRebuild, applyFont
+local applyStyle, performRebuild, applyFont, persistChoice
 
 local painted = {}
 
@@ -327,10 +327,33 @@ do
 	}
 end
 
+-- Every Roblox font, for the settings font picker.
+local ALL_FONTS = {}
+do
+	for _, f in ipairs(Enum.Font:GetEnumItems()) do
+		if f.Name ~= "Unknown" then table.insert(ALL_FONTS, f.Name) end
+	end
+	table.sort(ALL_FONTS)
+end
+
 -- Swaps the active font trio. Read at construction, so a generation/font switch
--- takes effect on the next rebuild. Accepts a preset key or a custom Font trio.
+-- takes effect on the next rebuild. Accepts a preset key ("builder"/"gotham"/
+-- "mono") or any Enum.Font name (weight variants are auto-detected).
 function applyFont(key)
-	local set = FONT_SETS[key or "builder"] or FONT_SETS.builder
+	local set = key and FONT_SETS[key]
+	if not set and key then
+		local ok, base = pcall(function() return Enum.Font[key] end)
+		if ok and base then
+			local function variant(suffix)
+				local o, f = pcall(function() return Enum.Font[key .. suffix] end)
+				return o and f or nil
+			end
+			local med = variant("Medium") or base
+			local bold = variant("Bold") or variant("SemiBold") or med
+			set = { base, med, bold }
+		end
+	end
+	set = set or FONT_SETS.builder
 	FONT_REGULAR, FONT_MEDIUM, FONT_BOLD = set[1], set[2], set[3]
 end
 applyFont("builder")
@@ -1548,6 +1571,7 @@ local function _constructWindow(Settings)
 		Parent = root,
 	})
 	paint(window, "BackgroundColor3", "Background")
+	window.BackgroundTransparency = GEN.transparency
 	local windowCorner = round(window, GenStyle.windowCorner)
 
 	local windowStroke=create("UIStroke",{Color = Color3.fromRGB(255, 255, 255), Transparency = 0.93, Thickness = 1, Parent = window})
@@ -7170,16 +7194,36 @@ local function _constructWindow(Settings)
 				end
 			end,
 		})
-		local fontKeyToLabel = { builder = "Builder", gotham = "Gotham", mono = "Mono" }
+		-- every Roblox font, plus Auto (follows the generation default). Type to search.
+		local fontOptions = { "Auto" }
+		for _, name in ipairs(ALL_FONTS) do table.insert(fontOptions, name) end
+		local curFont = "Auto"
+		if type(GEN.fontOverride) == "string" then
+			for _, name in ipairs(ALL_FONTS) do
+				if name == GEN.fontOverride or string.lower(name) == GEN.fontOverride then curFont = name break end
+			end
+		end
 		SettingsTab:CreateDropdown({
 			Name = "Font",
 			Icon = "type",
-			Options = {"Auto", "Builder", "Gotham", "Mono"},
-			CurrentOption = GEN.fontOverride and (fontKeyToLabel[GEN.fontOverride] or "Auto") or "Auto",
+			Placeholder = "Auto",
+			Options = fontOptions,
+			CurrentOption = curFont,
 			Callback = function(opt)
 				local name = type(opt) == "table" and opt[1] or opt
-				local key = (name == "Auto" or not name) and nil or string.lower(name)
+				local key = (name == "Auto" or not name) and nil or name
 				task.spawn(function() RayfieldLibrary:SetFont(key) end)
+			end,
+		})
+		SettingsTab:CreateSlider({
+			Name = "Window transparency",
+			Icon = "square",
+			Range = { 0, 90 },
+			Increment = 1,
+			Suffix = "%",
+			CurrentValue = math.floor(GEN.transparency * 100 + 0.5),
+			Callback = function(v)
+				Window:SetTransparency(v / 100)
 			end,
 		})
 
@@ -7373,6 +7417,14 @@ local function _constructWindow(Settings)
 			applyTabStyle()
 			styleTabPills()
 		end
+	end
+
+	-- 0 = solid, up to ~0.9 = see-through window panel
+	function Window:SetTransparency(value)
+		local t = math.clamp(tonumber(value) or 0, 0, 0.92)
+		GEN.transparency = t
+		window.BackgroundTransparency = t
+		persistChoice()
 	end
 
 	function Window:Greet(GreetSettings)
@@ -7571,12 +7623,13 @@ function applyStyle()
 	applyFont(GEN.fontOverride or GenStyle.fontKey)
 end
 
-local function persistChoice()
+function persistChoice()
 	if not fsAvailable then return end
 	pcall(function()
 		mkfolder(BASE_FOLDER)
 		writef(GEN_FILE, HttpService:JSONEncode({
 			generation = GEN.generation, theme = GEN.theme, font = GEN.fontOverride,
+			transparency = GEN.transparency,
 		}))
 	end)
 end
@@ -7590,6 +7643,7 @@ local function loadPersistedChoice()
 		if GENERATIONS[data.generation] then GEN.generation = data.generation end
 		if data.theme and THEMES[data.theme] then GEN.theme = data.theme end
 		if data.font ~= nil then GEN.fontOverride = data.font end
+		if type(data.transparency) == "number" then GEN.transparency = math.clamp(data.transparency, 0, 0.92) end
 	end
 end
 
@@ -7742,6 +7796,7 @@ function RayfieldLibrary:CreateWindow(Settings)
 	if Settings.Generation and GENERATIONS[Settings.Generation] then GEN.generation = Settings.Generation end
 	if Settings.Theme and THEMES[Settings.Theme] then GEN.theme = Settings.Theme end
 	if Settings.Font ~= nil then GEN.fontOverride = Settings.Font end
+	if type(Settings.Transparency) == "number" then GEN.transparency = math.clamp(Settings.Transparency, 0, 0.92) end
 	loadPersistedChoice()
 	applyStyle()
 	local record = { settings = Settings, children = {} }
