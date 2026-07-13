@@ -5355,11 +5355,13 @@ local function _constructWindow(Settings)
 
 			local function renderRows()
 				for _, row in ipairs(optionRows) do
-					local selected = isSelected(row.option)
-					row.frame.BackgroundColor3 = selected and Theme.CardSelected or Theme.CardInset
-					row.check.Visible = selected
-					row.label.Position = UDim2.new(0, selected and 44 or 17, 0.5, 0)
-					row.label.TextColor3 = selected and Theme.TextTitle or Theme.TextSub
+					if not row.isSection then
+						local selected = isSelected(row.option)
+						row.frame.BackgroundColor3 = selected and Theme.CardSelected or Theme.CardInset
+						row.check.Visible = selected
+						row.label.Position = UDim2.new(0, selected and 44 or 17, 0.5, 0)
+						row.label.TextColor3 = selected and Theme.TextTitle or Theme.TextSub
+					end
 				end
 			end
 
@@ -5393,6 +5395,28 @@ local function _constructWindow(Settings)
 				end
 				optionRows = {}
 				for i, option in ipairs(options) do
+					if type(option) == "table" and option.Section then
+						-- non-selectable section header inside the list
+						local header = create("Frame", {
+							BackgroundTransparency = 1,
+							Size = UDim2.new(1, 0, 0, 26),
+							LayoutOrder = i + 1,
+							Parent = listHolder,
+						})
+						local hlbl = create("TextLabel", {
+							BackgroundTransparency = 1,
+							AnchorPoint = Vector2.new(0, 1),
+							Position = UDim2.new(0, 14, 1, -4),
+							Size = UDim2.new(1, -20, 0, 14),
+							Font = FONT_BOLD,
+							TextSize = 12,
+							TextXAlignment = Enum.TextXAlignment.Left,
+							Text = string.upper(tostring(option.Section)),
+							Parent = header,
+						})
+						paint(hlbl, "TextColor3", "TextMuted")
+						table.insert(optionRows, {frame = header, isSection = true})
+					else
 					local row = create("Frame", {
 						Size = UDim2.new(1, 0, 0, OPTION_H),
 						LayoutOrder = i + 1,
@@ -5440,6 +5464,7 @@ local function _constructWindow(Settings)
 						choose(option)
 					end)
 					table.insert(optionRows,entry)
+					end
 				end
 				renderRows()
 			end
@@ -5447,7 +5472,11 @@ local function _constructWindow(Settings)
 			connect(optionSearch:GetPropertyChangedSignal("Text"), function()
 				local q = string.lower(optionSearch.Text)
 				for _, row in ipairs(optionRows) do
-					row.frame.Visible = q == "" or string.find(string.lower(tostring(row.option)), q,1, true) ~= nil
+					if row.isSection then
+						row.frame.Visible = q == ""
+					else
+						row.frame.Visible = q == "" or string.find(string.lower(tostring(row.option)), q,1, true) ~= nil
+					end
 				end
 				if open then
 					tween(listHolder,TI_FAST, {Size = UDim2.new(1, 0, 0, visibleListHeight())})
