@@ -968,21 +968,19 @@ function RayfieldLibrary:Dialog(data)
 		BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), ZIndex = 500, Parent = overlay,
 	})
 
-	-- CanvasGroup so the whole card fades and scales as one unit
-	local card = create("CanvasGroup", {
+	-- plain Frame, shown instantly (no scale/fade, which glitched on CanvasGroup)
+	local card = create("Frame", {
 		Name = "Card",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(430, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
-		GroupTransparency = 1,
 		ZIndex = 501,
 		Parent = overlay,
 	})
 	paint(card, "BackgroundColor3", "Background")
 	round(card, math.max(16, GenStyle.cardRadius + 2))
 	create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = card })
-	local scale = create("UIScale", { Scale = 0.92, Parent = card })
 	create("UIListLayout", {
 		FillDirection = Enum.FillDirection.Vertical,
 		SortOrder = Enum.SortOrder.LayoutOrder,
@@ -995,10 +993,7 @@ function RayfieldLibrary:Dialog(data)
 	local function close()
 		if closed then return end
 		closed = true
-		tween(overlay, TI_FAST, { BackgroundTransparency = 1 })
-		tween(card, TI_FAST, { GroupTransparency = 1 })
-		tween(scale, TI_FAST, { Scale = 0.94 })
-		task.delay(0.16, function() overlay:Destroy() end)
+		overlay:Destroy()
 	end
 
 	-- title row: close (x) on the left, then the title
@@ -1104,10 +1099,8 @@ function RayfieldLibrary:Dialog(data)
 		end)
 	end
 
-	-- smooth pop in
-	tween(overlay, TI_MED, { BackgroundTransparency = 0.5 })
-	tween(card, TI_SMOOTH, { GroupTransparency = 0 })
-	tween(scale, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
+	-- shown instantly, no animation
+	overlay.BackgroundTransparency = 0.5
 	return { Close = close }
 end
 
