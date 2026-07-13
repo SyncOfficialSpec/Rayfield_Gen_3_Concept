@@ -5065,19 +5065,23 @@ local function _constructWindow(Settings)
 			})
 			paint(valueLabel, "TextColor3", "TextSub")
 
+			-- WindUI-style slider: a thin faint track, an accent fill, and a
+			-- white pill thumb with a soft shadow and a glass sheen.
 			local track
 			if compact then
 				track = create("Frame", {
-					Position = UDim2.fromOffset(15, 46),
-					Size = UDim2.new(1,-30, 0, 16),
-					BackgroundColor3 = Color3.fromRGB(47, 47, 47),
+					Position = UDim2.fromOffset(15, 51),
+					Size = UDim2.new(1,-30, 0, 6),
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+					BackgroundTransparency = 0.86,
 				})
 			else
 				track = create("Frame",{
 					AnchorPoint = Vector2.new(1, 0.5),
 					Position = UDim2.new(1, -17, 0.5, 0),
-					Size = UDim2.new(0.46,0,0, 16),
-					BackgroundColor3 = Color3.fromRGB(47, 47, 47),
+					Size = UDim2.new(0.46,0,0, 6),
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+					BackgroundTransparency = 0.86,
 				})
 			end
 			roundFull(track)
@@ -5101,12 +5105,48 @@ local function _constructWindow(Settings)
 			local knob = create("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.new(0.5,0,0.5, 0),
-				Size = UDim2.fromOffset(48, 26),
+				Size = UDim2.fromOffset(30, 18),
+				BackgroundTransparency = 1,
 				ZIndex = 3,
 			})
-			paint(knob, "BackgroundColor3", "Knob")
-			roundFull(knob)
+			create("ImageLabel", {
+				Name = "Shadow",
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.new(1, 14, 1, 14),
+				Image = GLOW_IMAGE,
+				ImageColor3 = Color3.fromRGB(0, 0, 0),
+				ImageTransparency = 0.68,
+				ScaleType = Enum.ScaleType.Slice,
+				SliceCenter = Rect.new(49, 49, 450, 450),
+				ZIndex = 3,
+				Parent = knob,
+			})
+			local pill = create("Frame", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				ZIndex = 4,
+				Parent = knob,
+			})
+			roundFull(pill)
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(234, 235, 238)),
+				Parent = pill,
+			})
 			knob.Parent = track
+
+			-- taller invisible hit area so the thin track is easy to grab
+			local hit = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.new(1, 8, 0, 26),
+				ZIndex = 10,
+				Parent = track,
+			})
 
 			local Slider = {
 				Type = "Slider",
@@ -5154,14 +5194,14 @@ local function _constructWindow(Settings)
 			end
 
 			local dragging = false
-			track.InputBegan:Connect(function(input)
+			hit.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					dragging = true
 					local alpha = (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
 					setFromAlpha(math.clamp(alpha, 0, 1))
 				end
 			end)
-			track.InputEnded:Connect(function(input)
+			hit.InputEnded:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					dragging = false
 				end
