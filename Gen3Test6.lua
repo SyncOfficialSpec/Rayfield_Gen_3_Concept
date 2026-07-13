@@ -52,6 +52,7 @@ Adv:CreateSlider({ Name = "Nested slider", Range = { 0, 100 }, Increment = 1, Cu
 Home:CreateChangelog({
 	Title = "Update Log",
 	Version = "v6",
+	Date = "Jul 13",
 	Entries = {
 		{ Type = "+", Text = "Hold button, dialogs, and collapsible sections" },
 		{ Type = "+", Text = "Preset color themes and custom fonts" },

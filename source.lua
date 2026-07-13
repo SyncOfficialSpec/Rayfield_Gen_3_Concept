@@ -6771,15 +6771,17 @@ local function _constructWindow(Settings)
 		-- tag ([+] add, [-] remove, [~] change, [*] note).
 		function Tab:CreateChangelog(LogSettings)
 			LogSettings = LogSettings or {}
+			local muted = Color3.fromRGB(150, 152, 160)
 			local TAGS = {
-				["+"] = { color = Color3.fromRGB(96, 200, 140), word = "ADDED" },
-				["-"] = { color = Color3.fromRGB(228, 100, 100), word = "REMOVED" },
-				["~"] = { color = Color3.fromRGB(240, 176, 74), word = "CHANGED" },
-				["!"] = { color = Color3.fromRGB(120, 180, 250), word = "FIXED" },
-				["*"] = { color = Color3.fromRGB(150, 150, 158), word = "NOTE" },
+				["+"] = { color = Color3.fromRGB(110, 192, 142), word = "ADDED" },
+				["-"] = { color = Color3.fromRGB(214, 120, 120), word = "REMOVED" },
+				["~"] = { color = Color3.fromRGB(220, 180, 112), word = "CHANGED" },
+				["!"] = { color = Color3.fromRGB(122, 166, 226), word = "FIXED" },
+				["*"] = { color = muted, word = "NOTE" },
 			}
 
-			-- one cohesive release-notes panel
+			-- refined release-notes panel: a header, a hairline, then a timeline
+			-- of entries with a small node dot, small-caps category, and body text
 			local card = create("Frame", {
 				AutomaticSize = Enum.AutomaticSize.Y,
 				Size = UDim2.new(1, 0, 0, 0),
@@ -6789,18 +6791,18 @@ local function _constructWindow(Settings)
 			card:SetAttribute("SearchName", (LogSettings.Title or "changelog"))
 			paint(card, "BackgroundColor3", "Card")
 			cardBase(card)
-			padAll(card, 16, 18, 16, 18)
+			padAll(card, 17, 20, 16, 20)
 			create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
 				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 11),
+				Padding = UDim.new(0, 14),
 				Parent = card,
 			})
 
-			-- header row: title, optional version pill on the right
+			-- header: title on the left, a quiet version / date on the right
 			local head = create("Frame", {
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, 0, 0, 22),
+				Size = UDim2.new(1, 0, 0, 24),
 				LayoutOrder = 1,
 				Parent = card,
 			})
@@ -6808,42 +6810,36 @@ local function _constructWindow(Settings)
 				BackgroundTransparency = 1,
 				AnchorPoint = Vector2.new(0, 0.5),
 				Position = UDim2.new(0, 0, 0.5, 0),
-				Size = UDim2.new(1, -80, 1, 0),
+				Size = UDim2.new(0.6, 0, 1, 0),
 				Font = FONT_BOLD,
-				TextSize = 17,
+				TextSize = 18,
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextTruncate = Enum.TextTruncate.AtEnd,
 				Text = LogSettings.Title or "Update Log",
 				Parent = head,
 			})
 			paint(htitle, "TextColor3", "TextTitle")
-			if LogSettings.Version then
-				local vpill = create("Frame", {
+			local metaParts = {}
+			if LogSettings.Version then table.insert(metaParts, tostring(LogSettings.Version)) end
+			if LogSettings.Date then table.insert(metaParts, tostring(LogSettings.Date)) end
+			if #metaParts > 0 then
+				local meta = create("TextLabel", {
+					BackgroundTransparency = 1,
 					AnchorPoint = Vector2.new(1, 0.5),
 					Position = UDim2.new(1, 0, 0.5, 0),
-					AutomaticSize = Enum.AutomaticSize.X,
-					Size = UDim2.new(0, 0, 0, 20),
-					BackgroundColor3 = Theme.Accent,
-					BackgroundTransparency = 0.8,
+					Size = UDim2.new(0.4, 0, 1, 0),
+					Font = FONT_MEDIUM,
+					TextSize = 13,
+					TextXAlignment = Enum.TextXAlignment.Right,
+					Text = table.concat(metaParts, "  \u{00B7}  "),
 					Parent = head,
 				})
-				roundFull(vpill)
-				padAll(vpill, 0, 9, 0, 9)
-				local vl = create("TextLabel", {
-					BackgroundTransparency = 1,
-					AutomaticSize = Enum.AutomaticSize.X,
-					Size = UDim2.new(0, 0, 1, 0),
-					Font = FONT_BOLD,
-					TextSize = 12,
-					Text = tostring(LogSettings.Version),
-					TextColor3 = Theme.AccentSoft,
-					Parent = vpill,
-				})
+				paint(meta, "TextColor3", "TextSub")
 			end
 			create("Frame", {
 				Size = UDim2.new(1, 0, 0, 1),
 				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-				BackgroundTransparency = 0.9,
+				BackgroundTransparency = 0.92,
 				BorderSizePixel = 0,
 				LayoutOrder = 2,
 				Parent = card,
@@ -6852,47 +6848,49 @@ local function _constructWindow(Settings)
 			for i, e in ipairs(LogSettings.Entries or {}) do
 				local etype = (type(e) == "table" and (e.Type or e.Tag)) or "*"
 				local text = (type(e) == "table" and e.Text) or tostring(e)
-				local meta = TAGS[etype] or TAGS["*"]
-				local word = (type(e) == "table" and e.Label) or meta.word
+				local m = TAGS[etype] or TAGS["*"]
+				local word = (type(e) == "table" and e.Label) or m.word
 
 				local row = create("Frame", {
 					BackgroundTransparency = 1,
 					AutomaticSize = Enum.AutomaticSize.Y,
-					Size = UDim2.new(1, 0, 0, 20),
+					Size = UDim2.new(1, 0, 0, 18),
 					LayoutOrder = i + 2,
 					Parent = card,
 				})
 				row:SetAttribute("SearchName", text)
-				-- colored word tag pill
-				local pill = create("Frame", {
-					AutomaticSize = Enum.AutomaticSize.X,
-					Position = UDim2.fromOffset(0, 1),
-					Size = UDim2.new(0, 0, 0, 19),
-					BackgroundColor3 = meta.color,
-					BackgroundTransparency = 0.84,
+				-- timeline node dot, aligned to the first line
+				local dot = create("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0),
+					Position = UDim2.new(0, 4, 0, 6),
+					Size = UDim2.fromOffset(7, 7),
+					BackgroundColor3 = m.color,
+					BorderSizePixel = 0,
 					Parent = row,
 				})
-				roundFull(pill)
-				padAll(pill, 0, 9, 0, 9)
+				roundFull(dot)
+				-- small-caps category, quietly colored
 				create("TextLabel", {
 					BackgroundTransparency = 1,
-					AutomaticSize = Enum.AutomaticSize.X,
-					Size = UDim2.new(0, 0, 1, 0),
+					Position = UDim2.fromOffset(18, 0),
+					Size = UDim2.new(0, 74, 0, 18),
 					Font = FONT_BOLD,
-					TextSize = 11,
+					TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top,
 					Text = string.upper(tostring(word)),
-					TextColor3 = meta.color,
-					Parent = pill,
+					TextColor3 = m.color:Lerp(muted, 0.35),
+					Parent = row,
 				})
-				-- entry text, wraps beside the tag column
+				-- body text
 				local lbl = create("TextLabel", {
 					BackgroundTransparency = 1,
-					Position = UDim2.fromOffset(96, 0),
-					Size = UDim2.new(1, -96, 0, 0),
+					Position = UDim2.fromOffset(100, 0),
+					Size = UDim2.new(1, -100, 0, 0),
 					AutomaticSize = Enum.AutomaticSize.Y,
 					Font = FONT_MEDIUM,
 					TextSize = 14,
-					LineHeight = 1.15,
+					LineHeight = 1.2,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					TextYAlignment = Enum.TextYAlignment.Top,
 					TextWrapped = true,
