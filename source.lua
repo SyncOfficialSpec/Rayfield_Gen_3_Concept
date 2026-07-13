@@ -350,6 +350,29 @@ end
 
 local GLOW_IMAGE = 'rbxassetid://6014261993'
 
+-- The original Rayfield window shadow (asset 5587865193). It only renders via
+-- getcustomasset, so we download the PNG once (exactly as Rayfield does) and
+-- cache it locally. Falls back to GLOW_IMAGE when unavailable.
+local RAYFIELD_SHADOW = { id = "5587865193", asset = nil, tried = false, slice = Rect.new(91, 91, 187, 328) }
+local function rayfieldShadow()
+	if RAYFIELD_SHADOW.tried then return RAYFIELD_SHADOW.asset end
+	RAYFIELD_SHADOW.tried = true
+	if not fsAvailable or type(getcustomasset) ~= "function" then return nil end
+	pcall(function()
+		local folder = BASE_FOLDER .. "/Assets"
+		mkfolder(folder)
+		local path = folder .. "/" .. RAYFIELD_SHADOW.id .. ".png"
+		if not (isfile and isfile(path)) then
+			local data = fetch("https://github.com/SiriusSoftwareLtd/Rayfield/blob/main/assets/" .. RAYFIELD_SHADOW.id .. ".png?raw=true")
+			if data and #data > 0 then writefile(path, data) end
+		end
+		if isfile and isfile(path) then
+			RAYFIELD_SHADOW.asset = getcustomasset(path)
+		end
+	end)
+	return RAYFIELD_SHADOW.asset
+end
+
 -- True radial glow. A core layer plus a wider faint layer give a soft bloom
 -- with no hard edge (the shadow slice asset can only draw a rectangle).
 local GLOW_RADIAL = 'rbxassetid://8992230677'
@@ -1089,18 +1112,20 @@ function RayfieldLibrary:Dialog(data)
 		BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), ZIndex = 500, Parent = overlay,
 	})
 
-	-- soft drop shadow so the panel floats (no border)
+	-- soft drop shadow so the panel floats (no border), same Rayfield asset
+	local dlgShadow = rayfieldShadow()
+	local DLG_SHADOW_PAD = dlgShadow and 55 or 23
 	local shadow = create("ImageLabel", {
 		Name = "Shadow",
 		BackgroundTransparency = 1,
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(470, 120),
-		Image = GLOW_IMAGE,
-		ImageColor3 = Color3.fromRGB(0, 0, 0),
+		Image = dlgShadow or GLOW_IMAGE,
+		ImageColor3 = Color3.fromRGB(20, 20, 20),
 		ImageTransparency = 0.35,
 		ScaleType = Enum.ScaleType.Slice,
-		SliceCenter = Rect.new(49, 49, 450, 450),
+		SliceCenter = dlgShadow and RAYFIELD_SHADOW.slice or Rect.new(49, 49, 450, 450),
 		ZIndex = 500,
 		Parent = overlay,
 	})
@@ -1119,7 +1144,7 @@ function RayfieldLibrary:Dialog(data)
 	round(card, math.max(18, GenStyle.windowCorner))
 	local function syncShadow()
 		local s = card.AbsoluteSize
-		shadow.Size = UDim2.fromOffset(s.X + 46, s.Y + 46)
+		shadow.Size = UDim2.fromOffset(s.X + DLG_SHADOW_PAD * 2, s.Y + DLG_SHADOW_PAD * 2)
 	end
 	card:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncShadow)
 	task.defer(syncShadow)
@@ -1644,17 +1669,19 @@ local function _constructWindow(Settings)
 		Parent = rootGui,
 	})
 
+	local rfShadow = rayfieldShadow()
+	local SHADOW_PAD = rfShadow and 55 or 18
 	local shadow = create("ImageLabel", {
 		Name = "Shadow",
 		BackgroundTransparency = 1,
 		AnchorPoint = Vector2.new(0.5, 0),
-		Position = UDim2.new(0.5, 0, 0,-18),
-		Size = UDim2.fromOffset(WINDOW_W + 36, WINDOW_H + 36),
-		Image = GLOW_IMAGE,
-		ImageColor3 = Color3.fromRGB(0, 0, 0),
+		Position = UDim2.new(0.5, 0, 0, -SHADOW_PAD),
+		Size = UDim2.fromOffset(WINDOW_W + SHADOW_PAD * 2, WINDOW_H + SHADOW_PAD * 2),
+		Image = rfShadow or GLOW_IMAGE,
+		ImageColor3 = Color3.fromRGB(20, 20, 20),
 		ImageTransparency = 0.6,
 		ScaleType = Enum.ScaleType.Slice,
-		SliceCenter = Rect.new(49, 49, 450, 450),
+		SliceCenter = rfShadow and RAYFIELD_SHADOW.slice or Rect.new(49, 49, 450, 450),
 		ZIndex = 0,
 		Parent = root,
 	})
@@ -1712,7 +1739,7 @@ local function _constructWindow(Settings)
 	connect(window:GetPropertyChangedSignal("Size"), function()
 		local size=window.Size
 		handle.Position=UDim2.new(0.5, 0, 0,size.Y.Offset + 12)
-		shadow.Size = UDim2.fromOffset(size.X.Offset + 36,size.Y.Offset + 36)
+		shadow.Size = UDim2.fromOffset(size.X.Offset + SHADOW_PAD * 2, size.Y.Offset + SHADOW_PAD * 2)
 	end)
 
 	local pillContent = create("CanvasGroup", {
