@@ -6852,10 +6852,14 @@ local function _constructWindow(Settings)
 					Parent = card,
 				})
 				row:SetAttribute("SearchName", text)
-				-- timeline node dot, aligned to the first line
+				-- The body is top-aligned; its first line is centered at ~LINE/2.
+				-- The dot and category are centered on that same line so all three
+				-- align, and multi-line entries keep wrapping cleanly below.
+				local LINE = 18
+				-- timeline node dot, on the first line
 				local dot = create("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0),
-					Position = UDim2.new(0, 4, 0, 6),
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0, 4, 0, LINE / 2),
 					Size = UDim2.fromOffset(7, 7),
 					BackgroundColor3 = m.color,
 					BorderSizePixel = 0,
@@ -6866,16 +6870,16 @@ local function _constructWindow(Settings)
 				create("TextLabel", {
 					BackgroundTransparency = 1,
 					Position = UDim2.fromOffset(18, 0),
-					Size = UDim2.new(0, 74, 0, 18),
+					Size = UDim2.new(0, 74, 0, LINE),
 					Font = FONT_BOLD,
 					TextSize = 12,
 					TextXAlignment = Enum.TextXAlignment.Left,
-					TextYAlignment = Enum.TextYAlignment.Top,
+					TextYAlignment = Enum.TextYAlignment.Center,
 					Text = string.upper(tostring(word)),
 					TextColor3 = m.color:Lerp(muted, 0.35),
 					Parent = row,
 				})
-				-- body text
+				-- body text, top-aligned so the first line sits in the LINE box
 				local lbl = create("TextLabel", {
 					BackgroundTransparency = 1,
 					Position = UDim2.fromOffset(100, 0),
@@ -6883,7 +6887,7 @@ local function _constructWindow(Settings)
 					AutomaticSize = Enum.AutomaticSize.Y,
 					Font = FONT_MEDIUM,
 					TextSize = 14,
-					LineHeight = 1.2,
+					LineHeight = 1.28,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					TextYAlignment = Enum.TextYAlignment.Top,
 					TextWrapped = true,
