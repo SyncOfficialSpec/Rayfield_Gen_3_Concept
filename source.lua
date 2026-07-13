@@ -968,6 +968,22 @@ function RayfieldLibrary:Dialog(data)
 		BackgroundTransparency = 1, Text = "", Size = UDim2.fromScale(1, 1), ZIndex = 500, Parent = overlay,
 	})
 
+	-- soft drop shadow so the panel floats (no border)
+	local shadow = create("ImageLabel", {
+		Name = "Shadow",
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(470, 120),
+		Image = GLOW_IMAGE,
+		ImageColor3 = Color3.fromRGB(0, 0, 0),
+		ImageTransparency = 0.35,
+		ScaleType = Enum.ScaleType.Slice,
+		SliceCenter = Rect.new(49, 49, 450, 450),
+		ZIndex = 500,
+		Parent = overlay,
+	})
+
 	-- plain Frame, shown instantly (no scale/fade, which glitched on CanvasGroup)
 	local card = create("Frame", {
 		Name = "Card",
@@ -979,8 +995,13 @@ function RayfieldLibrary:Dialog(data)
 		Parent = overlay,
 	})
 	paint(card, "BackgroundColor3", "Background")
-	round(card, math.max(16, GenStyle.cardRadius + 2))
-	create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = card })
+	round(card, math.max(18, GenStyle.windowCorner))
+	local function syncShadow()
+		local s = card.AbsoluteSize
+		shadow.Size = UDim2.fromOffset(s.X + 46, s.Y + 46)
+	end
+	card:GetPropertyChangedSignal("AbsoluteSize"):Connect(syncShadow)
+	task.defer(syncShadow)
 	create("UIListLayout", {
 		FillDirection = Enum.FillDirection.Vertical,
 		SortOrder = Enum.SortOrder.LayoutOrder,
