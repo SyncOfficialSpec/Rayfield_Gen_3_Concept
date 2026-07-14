@@ -5283,23 +5283,21 @@ local function _constructWindow(Settings)
 			})
 			paint(valueLabel, "TextColor3", "TextSub")
 
-			-- Thin faint track, an accent fill, and a white pill thumb with a
-			-- soft shadow and a glass sheen.
+			-- Gen 2 fanmade look: a chunky track, an accent-gradient fill and a
+			-- solid white pill knob.
 			local track
 			if compact then
 				track = create("Frame", {
-					Position = UDim2.fromOffset(15, 51),
-					Size = UDim2.new(1,-30, 0, 6),
-					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-					BackgroundTransparency = 0.86,
+					Position = UDim2.fromOffset(15, 46),
+					Size = UDim2.new(1,-30, 0, 16),
+					BackgroundColor3 = Color3.fromRGB(47, 47, 47),
 				})
 			else
 				track = create("Frame",{
 					AnchorPoint = Vector2.new(1, 0.5),
 					Position = UDim2.new(1, -17, 0.5, 0),
-					Size = UDim2.new(0.46,0,0, 6),
-					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-					BackgroundTransparency = 0.86,
+					Size = UDim2.new(0.46,0,0, 16),
+					BackgroundColor3 = Color3.fromRGB(47, 47, 47),
 				})
 			end
 			roundFull(track)
@@ -5323,48 +5321,12 @@ local function _constructWindow(Settings)
 			local knob = create("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.new(0.5,0,0.5, 0),
-				Size = UDim2.fromOffset(30, 18),
-				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(48, 26),
 				ZIndex = 3,
 			})
-			create("ImageLabel", {
-				Name = "Shadow",
-				BackgroundTransparency = 1,
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.new(1, 14, 1, 14),
-				Image = GLOW_IMAGE,
-				ImageColor3 = Color3.fromRGB(0, 0, 0),
-				ImageTransparency = 0.68,
-				ScaleType = Enum.ScaleType.Slice,
-				SliceCenter = Rect.new(49, 49, 450, 450),
-				ZIndex = 3,
-				Parent = knob,
-			})
-			local pill = create("Frame", {
-				Size = UDim2.fromScale(1, 1),
-				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-				ZIndex = 4,
-				Parent = knob,
-			})
-			roundFull(pill)
-			create("UIGradient", {
-				Rotation = 90,
-				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(234, 235, 238)),
-				Parent = pill,
-			})
+			paint(knob, "BackgroundColor3", "Knob")
+			roundFull(knob)
 			knob.Parent = track
-
-			-- taller invisible hit area so the thin track is easy to grab
-			local hit = create("TextButton", {
-				BackgroundTransparency = 1,
-				Text = "",
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.new(1, 8, 0, 26),
-				ZIndex = 10,
-				Parent = track,
-			})
 
 			local Slider = {
 				Type = "Slider",
@@ -5385,18 +5347,17 @@ local function _constructWindow(Settings)
 				return text
 			end
 
-			local DRAG_TI = TweenInfo.new(0.08, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-			-- Edge-aligned knob (anchor tracks the value) so it uses the full
-			-- track with no squeeze and never overflows the ends.
-			local function render(ti)
-				ti = ti or TweenInfo.new(0)
+			local function render(animate)
 				local alpha = 0
 				if range[2] ~= range[1] then
 					alpha = (Slider.CurrentValue - range[1]) / (range[2] - range[1])
 				end
-				alpha = math.clamp(alpha, 0, 1)
-				tween(fill, ti, { Size = UDim2.new(alpha, 0, 1, 0) })
-				tween(knob, ti, { Position = UDim2.new(alpha, 0, 0.5, 0), AnchorPoint = Vector2.new(alpha, 0.5) })
+				alpha = math.clamp(alpha,0, 1)
+				local inset = 0.11
+				local shown = inset + alpha * (1 - 2 * inset)
+				local info = animate and TI_SMOOTH or TweenInfo.new(0)
+				tween(fill, info,{Size = UDim2.new(shown,0, 1, 0)})
+				tween(knob,info, {Position = UDim2.new(shown, 0, 0.5, 0)})
 				valueLabel.Text = fmt(Slider.CurrentValue)
 			end
 
@@ -5406,26 +5367,23 @@ local function _constructWindow(Settings)
 				snapped = math.clamp(snapped, range[1], range[2])
 				if math.abs(snapped - Slider.CurrentValue) > 1e-9 then
 					Slider.CurrentValue = snapped
-					render(DRAG_TI)
-					runCallback(SliderSettings.Callback, snapped)
+					render(true)
+					runCallback(SliderSettings.Callback,snapped)
 					saveConfiguration()
 				end
 			end
 
 			local dragging = false
-			local function stopDrag()
-				dragging = false
-			end
-			hit.InputBegan:Connect(function(input)
+			track.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					dragging = true
 					local alpha = (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
 					setFromAlpha(math.clamp(alpha, 0, 1))
 				end
 			end)
-			hit.InputEnded:Connect(function(input)
+			track.InputEnded:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-					stopDrag()
+					dragging = false
 				end
 			end)
 			connect(UserInputService.InputChanged,function(input)
@@ -5435,16 +5393,16 @@ local function _constructWindow(Settings)
 				end
 			end)
 			connect(UserInputService.InputEnded, function(input)
-				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-					stopDrag()
+				if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
+					dragging = false
 				end
 			end)
 
-			render()
+			render(false)
 
 			function Slider:Set(value)
 				Slider.CurrentValue = math.clamp(value, range[1], range[2])
-				render(TI_SMOOTH)
+				render(true)
 				runCallback(SliderSettings.Callback,Slider.CurrentValue)
 				saveConfiguration()
 			end
@@ -5583,11 +5541,28 @@ local function _constructWindow(Settings)
 			})
 			applyLucide(chevron, {"chevron-down"})
 
+			-- search icon: click to reveal the search bar inside the open list
+			local searchBtn = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -38, 0.5, 0),
+				Size = UDim2.fromOffset(26, 26),
+				ZIndex = 3,
+				Parent = card,
+			})
+			local searchIcon = makeIcon(searchBtn, "search", 16, Theme.TextSub)
+			if searchIcon then
+				searchIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+				searchIcon.Position = UDim2.fromScale(0.5, 0.5)
+				searchIcon.ZIndex = 3
+			end
+
 			local currentLabel = create("TextLabel", {
 				BackgroundTransparency = 1,
 				AnchorPoint=Vector2.new(1, 0.5),
-				Position=UDim2.new(1, -39, 0.5, 0),
-				Size = UDim2.new(0.4, -39, 0, 16),
+				Position=UDim2.new(1, -62, 0.5, 0),
+				Size = UDim2.new(0.4, -62, 0, 16),
 				Font=FONT_MEDIUM,
 				TextSize=14,
 				TextXAlignment = Enum.TextXAlignment.Right,
@@ -5609,8 +5584,7 @@ local function _constructWindow(Settings)
 				CanvasSize=UDim2.new(0, 0, 0,0),
 				AutomaticCanvasSize = Enum.AutomaticSize.Y,
 				ScrollingDirection = Enum.ScrollingDirection.Y,
-				ScrollBarThickness = 2,
-				ScrollBarImageColor3 = Color3.fromRGB(90, 90, 90),
+				ScrollBarThickness = 0,
 				BorderSizePixel = 0,
 				ClipsDescendants = true,
 				Visible = false,
@@ -5627,6 +5601,7 @@ local function _constructWindow(Settings)
 				Size = UDim2.new(1, 0, 0, SEARCH_H),
 				BackgroundTransparency = 0.35,
 				LayoutOrder = 1,
+				Visible = false, -- opened by the search icon in the header
 				Parent = listHolder,
 			})
 			paint(searchRow, "BackgroundColor3","SearchBox")
@@ -5659,6 +5634,7 @@ local function _constructWindow(Settings)
 			}
 
 			local open = false
+			local searchOn = false
 			local optionRows = {}
 
 			local function isSelected(option)
@@ -5685,7 +5661,7 @@ local function _constructWindow(Settings)
 				for _, row in ipairs(optionRows) do
 					if row.frame.Visible then count = count + 1 end
 				end
-				local h = SEARCH_H + GAP + count * (OPTION_H + GAP)
+				local h = (searchOn and (SEARCH_H + GAP) or 0) + count * (OPTION_H + GAP)
 				return math.min(h, MAX_LIST)
 			end
 
@@ -5705,9 +5681,31 @@ local function _constructWindow(Settings)
 					t.Completed:Connect(function()
 						if not open then listHolder.Visible = false; listHolder.Position = UDim2.fromOffset(0, 56) end
 					end)
+					searchOn = false
+					searchRow.Visible = false
+					if searchIcon then searchIcon.ImageColor3 = Theme.TextSub end
 					optionSearch.Text = ""
 				end
 			end
+
+			-- the search icon reveals the search bar (opening the list if needed)
+			local function setSearch(on)
+				searchOn = on and true or false
+				searchRow.Visible = searchOn
+				if searchIcon then searchIcon.ImageColor3 = searchOn and Theme.Accent or Theme.TextSub end
+				if searchOn then
+					if not open then setOpen(true) end
+					task.defer(function() if searchOn and searchRow.Parent then optionSearch:CaptureFocus() end end)
+				else
+					optionSearch.Text = ""
+				end
+				if open then
+					tween(listHolder, TI_FAST, { Size = UDim2.new(1, 0, 0, visibleListHeight()) })
+				end
+			end
+			searchBtn.MouseButton1Click:Connect(function()
+				setSearch(not searchOn)
+			end)
 
 			local function renderRows()
 				for _, row in ipairs(optionRows) do
