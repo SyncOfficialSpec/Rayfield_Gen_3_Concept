@@ -4073,6 +4073,7 @@ local function _constructWindow(Settings)
 			local Toggle = {
 				Type = "Toggle",
 				CurrentValue = ToggleSettings.CurrentValue == true,
+				Card = card,
 			}
 
 			local function render(animate)
@@ -5331,6 +5332,7 @@ local function _constructWindow(Settings)
 			local Slider = {
 				Type = "Slider",
 				CurrentValue = SliderSettings.CurrentValue or range[1],
+				Card = card,
 			}
 
 			local function fmt(v)
@@ -5631,6 +5633,7 @@ local function _constructWindow(Settings)
 			local Dropdown = {
 				Type = "Dropdown",
 				CurrentOption = current,
+				Card = card,
 			}
 
 			local open = false
@@ -7245,6 +7248,231 @@ local function _constructWindow(Settings)
 			return api
 		end
 
+		-- A spoiler. Hides its content (text and/or nested elements) behind a
+		-- blur-ish cover; the user taps the cover to reveal it, and taps the eye
+		-- to hide it again. Pass Text for a quick text spoiler, or add elements
+		-- to the returned container to hide a whole group.
+		function Tab:CreateSpoiler(SpoilerSettings)
+			SpoilerSettings = SpoilerSettings or {}
+			local name = SpoilerSettings.Name or SpoilerSettings.Title or "Spoiler"
+			local revealed = SpoilerSettings.Revealed == true
+
+			local card = create("Frame", {
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", name .. " " .. tostring(SpoilerSettings.Text or ""))
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+			padAll(card, 12, 12, 12, 14)
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 9),
+				Parent = card,
+			})
+
+			-- header: label on the left, an eye toggle on the right
+			local header = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 18),
+				LayoutOrder = 1,
+				Parent = card,
+			})
+			local hlabel = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, 0, 0.5, 0),
+				Size = UDim2.new(1, -30, 0, 18),
+				Font = FONT_MEDIUM,
+				TextSize = 15,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Text = name,
+				Parent = header,
+			})
+			paint(hlabel, "TextColor3", "TextBody")
+			local eyeBtn = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, 0, 0.5, 0),
+				Size = UDim2.fromOffset(24, 24),
+				Parent = header,
+			})
+			local eyeIcon = makeIcon(eyeBtn, "eye-off", 17, Theme.TextSub)
+			if eyeIcon then
+				eyeIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+				eyeIcon.Position = UDim2.fromScale(0.5, 0.5)
+			end
+
+			-- content lives in a wrapper the cover can overlay exactly
+			local wrap = create("Frame", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				LayoutOrder = 2,
+				Parent = card,
+			})
+			local content = create("Frame", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				ZIndex = 1,
+				Parent = wrap,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 8),
+				Parent = content,
+			})
+
+			-- optional inline spoiler text
+			if SpoilerSettings.Text and SpoilerSettings.Text ~= "" then
+				local txt = create("TextLabel", {
+					BackgroundTransparency = 1,
+					AutomaticSize = Enum.AutomaticSize.Y,
+					Size = UDim2.new(1, 0, 0, 0),
+					Font = FONT_REGULAR,
+					TextSize = 14,
+					TextWrapped = true,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					Text = SpoilerSettings.Text,
+					LayoutOrder = 1,
+					ZIndex = 1,
+					Parent = content,
+				})
+				paint(txt, "TextColor3", "TextBody")
+			end
+
+			-- container for nested elements (elements build into this frame)
+			local inner = create("Frame", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				LayoutOrder = 2,
+				ZIndex = 1,
+				Parent = content,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 8),
+				Parent = inner,
+			})
+
+			-- the cover: a CanvasGroup so we can fade the whole thing at once.
+			-- It sits on top of the content and swallows clicks while hidden.
+			local cover = create("CanvasGroup", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundColor3 = Theme.CardInset,
+				GroupTransparency = 0,
+				ZIndex = 4,
+				Parent = wrap,
+			})
+			paint(cover, "BackgroundColor3", "CardInset")
+			round(cover, GenStyle.cardRadius)
+			local coverStroke = create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = cover })
+			paint(coverStroke, "Color", "Stroke")
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(216, 216, 216)),
+				Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 0.92),
+					NumberSequenceKeypoint.new(1, 0.98),
+				}),
+				Parent = cover,
+			})
+			-- centered "tap to reveal" hint
+			local hint = create("Frame", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(180, 20),
+				ZIndex = 5,
+				Parent = cover,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 6),
+				Parent = hint,
+			})
+			local hintIcon = makeIcon(hint, "eye", 14, Theme.TextSub)
+			if hintIcon then hintIcon.LayoutOrder = 1; hintIcon.ZIndex = 5 end
+			local hintLabel = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 0, 20),
+				Font = FONT_MEDIUM,
+				TextSize = 13,
+				Text = SpoilerSettings.RevealText or "Tap to reveal",
+				LayoutOrder = 2,
+				ZIndex = 5,
+				Parent = hint,
+			})
+			paint(hintLabel, "TextColor3", "TextSub")
+			local coverBtn = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 6,
+				Parent = cover,
+			})
+
+			local revealEpoch = 0
+			local function apply(state, animate)
+				revealed = state and true or false
+				if eyeIcon then applyLucide(eyeIcon, revealed and "eye" or "eye-off") end
+				if revealed then
+					coverBtn.Active = false
+					if animate then
+						revealEpoch = revealEpoch + 1
+						local e = revealEpoch
+						tween(cover, TI_MED, { GroupTransparency = 1 })
+						task.delay(0.3, function()
+							if e == revealEpoch and revealed then cover.Visible = false end
+						end)
+					else
+						cover.GroupTransparency = 1
+						cover.Visible = false
+					end
+				else
+					revealEpoch = revealEpoch + 1
+					coverBtn.Active = true
+					cover.Visible = true
+					if animate then
+						cover.GroupTransparency = 1
+						tween(cover, TI_MED, { GroupTransparency = 0 })
+					else
+						cover.GroupTransparency = 0
+					end
+				end
+			end
+			apply(revealed, false)
+
+			coverBtn.MouseButton1Click:Connect(function() apply(true, true) end)
+			eyeBtn.MouseButton1Click:Connect(function() apply(not revealed, true) end)
+
+			local api = buildTabAPI(inner, false)
+			api.Card = card
+			function api:Reveal() apply(true, true) end
+			function api:Hide() apply(false, true) end
+			function api:Toggle() apply(not revealed, true) end
+			function api:IsRevealed() return revealed end
+			function api:SetText(t)
+				for _, child in ipairs(content:GetChildren()) do
+					if child:IsA("TextLabel") then child.Text = tostring(t or ""); break end
+				end
+			end
+			return api
+		end
+
 		-- Built-in AI chat. Works out of the box through a free, rate-limited
 		-- provider (no API key needed). Users can plug in their own
 		-- OpenAI-compatible keys; keys stack, and when one fails the chat asks
@@ -8452,6 +8680,385 @@ local function _constructWindow(Settings)
 				clipper:Destroy()
 			end)
 		end)
+	end
+
+	-- A "Get Started" tutorial. Script authors pass a list of steps; the user
+	-- gets a stepped overlay they can Skip, walk with Back/Next, and Finish.
+	-- A step may point at an element (Target) to highlight it.
+	function Window:CreateTutorial(TutorialSettings)
+		TutorialSettings = TutorialSettings or {}
+		local rawSteps = TutorialSettings.Steps or TutorialSettings.steps or {}
+		local steps = {}
+		for _, s in ipairs(rawSteps) do
+			if type(s) == "string" then
+				steps[#steps + 1] = { Content = s }
+			elseif type(s) == "table" then
+				steps[#steps + 1] = {
+					Title = s.Title or s.Name or s.Header,
+					Content = s.Content or s.Text or s.Body or s.Description or "",
+					Icon = s.Icon,
+					Target = s.Target,
+				}
+			end
+		end
+
+		local handle = {}
+		local active = false
+		local index = 0
+		local epoch = 0
+		local overlay, scrim, spot, cardHolder, cardScale, body, iconImg, titleLbl, contentLbl, dotsRow, backBtn, nextBtn, nextLbl, nextIcon, skipBtn
+		local dots = {}
+
+		local function finish(skipped)
+			if not active then return end
+			active = false
+			epoch = epoch + 1
+			local o = overlay
+			overlay = nil
+			if o then
+				tween(scrim, TI_MED, { BackgroundTransparency = 1 })
+				tween(o, TI_MED, { GroupTransparency = 1 })
+				if cardScale then tween(cardScale, TI_MED, { Scale = 0.94 }) end
+				task.delay(0.28, function() if o then o:Destroy() end end)
+			end
+			runCallback(skipped and TutorialSettings.OnSkip or TutorialSettings.OnFinish, index + 1)
+		end
+
+		local function positionSpot(target)
+			if not spot then return end
+			local ok = false
+			if typeof(target) == "Instance" and target:IsA("GuiObject") and target.Visible then
+				local wp, ws = window.AbsolutePosition, window.AbsoluteSize
+				local tp, ts = target.AbsolutePosition, target.AbsoluteSize
+				-- only if the target actually sits inside the window
+				if ts.X > 0 and ts.Y > 0 and tp.X + ts.X > wp.X and tp.X < wp.X + ws.X then
+					spot.Position = UDim2.fromOffset(tp.X - wp.X - 5, tp.Y - wp.Y - 5)
+					spot.Size = UDim2.fromOffset(ts.X + 10, ts.Y + 10)
+					ok = true
+				end
+			end
+			spot.Visible = ok
+			return ok
+		end
+
+		local function renderDots()
+			for i, dot in ipairs(dots) do
+				local on = (i == index + 1)
+				tween(dot, TI_FAST, {
+					BackgroundColor3 = on and Theme.Accent or Theme.TextMuted,
+					Size = on and UDim2.fromOffset(18, 6) or UDim2.fromOffset(6, 6),
+				})
+			end
+		end
+
+		local function show(i, dir)
+			index = math.clamp(i, 0, #steps - 1)
+			local step = steps[index + 1]
+			if not step then finish(false) return end
+			epoch = epoch + 1
+			local myEpoch = epoch
+
+			-- crossfade the body out, swap text, fade back in with a small slide
+			tween(body, TI_FAST, { GroupTransparency = 1 })
+			local slide = (dir == -1) and 14 or -14
+			tween(body, TI_FAST, { Position = UDim2.new(0, slide, 0, 0) })
+			task.delay(0.15, function()
+				if myEpoch ~= epoch or not active then return end
+				-- icon
+				if iconImg then
+					if step.Icon then
+						iconImg.Visible = true
+						applyLucide(iconImg, step.Icon)
+					else
+						iconImg.Visible = false
+					end
+				end
+				titleLbl.Visible = step.Title ~= nil and step.Title ~= ""
+				titleLbl.Text = step.Title or ""
+				contentLbl.Text = step.Content or ""
+				-- highlight the target (if any) and keep the card clear of it
+				local hasSpot = positionSpot(step.Target)
+				if hasSpot then
+					local tp = step.Target.AbsolutePosition.Y - window.AbsolutePosition.Y
+					local topHalf = tp < (window.AbsoluteSize.Y * 0.5)
+					cardHolder.AnchorPoint = Vector2.new(0.5, topHalf and 1 or 0)
+					cardHolder.Position = topHalf and UDim2.new(0.5, 0, 1, -22) or UDim2.new(0.5, 0, 0, 22)
+				else
+					cardHolder.AnchorPoint = Vector2.new(0.5, 0.5)
+					cardHolder.Position = UDim2.fromScale(0.5, 0.5)
+				end
+				-- buttons + dots
+				backBtn.Visible = index > 0
+				local last = index == #steps - 1
+				nextLbl.Text = last and "Finish" or "Next"
+				if nextIcon then applyLucide(nextIcon, last and "check" or "arrow-right") end
+				renderDots()
+				-- fade back in
+				body.Position = UDim2.new(0, -slide, 0, 0)
+				tween(body, TI_MED, { GroupTransparency = 0, Position = UDim2.new(0, 0, 0, 0) })
+			end)
+		end
+
+		local function build()
+			overlay = create("CanvasGroup", {
+				Name = "Tutorial",
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				GroupTransparency = 1,
+				ZIndex = 940,
+				Parent = window,
+			})
+			round(overlay, GenStyle.windowCorner)
+			overlay.ClipsDescendants = true
+
+			scrim = create("TextButton", {
+				Text = "",
+				AutoButtonColor = false,
+				BackgroundColor3 = Color3.fromRGB(6, 6, 8),
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 1,
+				Parent = overlay,
+			})
+
+			-- the highlight ring around a targeted element
+			spot = create("Frame", {
+				BackgroundTransparency = 1,
+				Visible = false,
+				ZIndex = 2,
+				Parent = overlay,
+			})
+			round(spot, 8)
+			local spotStroke = create("UIStroke", { Thickness = 2, Transparency = 0.1, Parent = spot })
+			paint(spotStroke, "Color", "Accent")
+
+			cardHolder = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.new(1, -60, 0, 0),
+				AutomaticSize = Enum.AutomaticSize.Y,
+				BackgroundColor3 = Theme.Card,
+				ZIndex = 3,
+				Parent = overlay,
+			})
+			paint(cardHolder, "BackgroundColor3", "Card")
+			create("UISizeConstraint", { MaxSize = Vector2.new(360, math.huge), Parent = cardHolder })
+			cardScale = create("UIScale", { Scale = 0.94, Parent = cardHolder })
+			round(cardHolder, math.max(10, GenStyle.cardRadius + 4))
+			local chStroke = create("UIStroke", { Transparency = 0.85, Thickness = 1, Parent = cardHolder })
+			paint(chStroke, "Color", "Stroke")
+			padAll(cardHolder, 20, 20, 18, 20)
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 14),
+				Parent = cardHolder,
+			})
+
+			-- body (icon + title + content), crossfaded on step change
+			body = create("CanvasGroup", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				GroupTransparency = 0,
+				LayoutOrder = 1,
+				ZIndex = 3,
+				Parent = cardHolder,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 8),
+				Parent = body,
+			})
+			iconImg = create("ImageLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(26, 26),
+				ImageColor3 = Theme.Accent,
+				LayoutOrder = 1,
+				ZIndex = 3,
+				Parent = body,
+			})
+			paint(iconImg, "ImageColor3", "Accent")
+			titleLbl = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				Font = FONT_BOLD,
+				TextSize = 19,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextWrapped = true,
+				Text = "",
+				LayoutOrder = 2,
+				ZIndex = 3,
+				Parent = body,
+			})
+			paint(titleLbl, "TextColor3", "TextTitle")
+			contentLbl = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 0),
+				Font = FONT_REGULAR,
+				TextSize = 14,
+				LineHeight = 1.12,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextYAlignment = Enum.TextYAlignment.Top,
+				TextWrapped = true,
+				Text = "",
+				LayoutOrder = 3,
+				ZIndex = 3,
+				Parent = body,
+			})
+			paint(contentLbl, "TextColor3", "TextSub")
+
+			-- progress dots
+			dotsRow = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 8),
+				LayoutOrder = 2,
+				ZIndex = 3,
+				Parent = cardHolder,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Left,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 6),
+				Parent = dotsRow,
+			})
+			dots = {}
+			for i = 1, #steps do
+				local dot = create("Frame", {
+					BackgroundColor3 = Theme.TextMuted,
+					Size = UDim2.fromOffset(6, 6),
+					LayoutOrder = i,
+					ZIndex = 3,
+					Parent = dotsRow,
+				})
+				roundFull(dot)
+				dots[i] = dot
+			end
+
+			-- footer: Skip on the left, Back + Next on the right
+			local footer = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, 36),
+				LayoutOrder = 3,
+				ZIndex = 3,
+				Parent = cardHolder,
+			})
+			skipBtn = create("TextButton", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0, 0.5),
+				Position = UDim2.new(0, 0, 0.5, 0),
+				Size = UDim2.fromOffset(80, 32),
+				Font = FONT_MEDIUM,
+				TextSize = 14,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Text = TutorialSettings.SkipText or "Skip",
+				ZIndex = 3,
+				Parent = footer,
+			})
+			paint(skipBtn, "TextColor3", "TextMuted")
+			skipBtn.MouseEnter:Connect(function() tween(skipBtn, TI_FAST, { TextColor3 = Theme.TextBody }) end)
+			skipBtn.MouseLeave:Connect(function() tween(skipBtn, TI_FAST, { TextColor3 = Theme.TextMuted }) end)
+
+			backBtn = create("TextButton", {
+				BackgroundColor3 = Theme.CardInset,
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, -108, 0.5, 0),
+				Size = UDim2.fromOffset(76, 34),
+				Font = FONT_MEDIUM,
+				TextSize = 14,
+				Text = "Back",
+				Visible = false,
+				ZIndex = 3,
+				Parent = footer,
+			})
+			paint(backBtn, "BackgroundColor3", "CardInset")
+			paint(backBtn, "TextColor3", "TextBody")
+			round(backBtn, 8)
+			backBtn.MouseEnter:Connect(function() tween(backBtn, TI_FAST, { BackgroundColor3 = Theme.CardHover }) end)
+			backBtn.MouseLeave:Connect(function() tween(backBtn, TI_FAST, { BackgroundColor3 = Theme.CardInset }) end)
+
+			nextBtn = create("TextButton", {
+				BackgroundColor3 = Theme.Accent,
+				AnchorPoint = Vector2.new(1, 0.5),
+				Position = UDim2.new(1, 0, 0.5, 0),
+				Size = UDim2.fromOffset(100, 34),
+				Text = "",
+				ZIndex = 3,
+				Parent = footer,
+			})
+			paint(nextBtn, "BackgroundColor3", "Accent")
+			round(nextBtn, 8)
+			local nextRow = create("Frame", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				Size = UDim2.fromOffset(88, 20),
+				ZIndex = 4,
+				Parent = nextBtn,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 6),
+				Parent = nextRow,
+			})
+			nextLbl = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 0, 20),
+				Font = FONT_BOLD,
+				TextSize = 14,
+				TextColor3 = Color3.fromRGB(255, 255, 255),
+				Text = "Next",
+				LayoutOrder = 1,
+				ZIndex = 4,
+				Parent = nextRow,
+			})
+			nextIcon = create("ImageLabel", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(15, 15),
+				ImageColor3 = Color3.fromRGB(255, 255, 255),
+				LayoutOrder = 2,
+				ZIndex = 4,
+				Parent = nextRow,
+			})
+			applyLucide(nextIcon, "arrow-right")
+			nextBtn.MouseEnter:Connect(function() tween(nextBtn, TI_FAST, { BackgroundColor3 = Theme.AccentSoft or Theme.Accent }) end)
+			nextBtn.MouseLeave:Connect(function() tween(nextBtn, TI_FAST, { BackgroundColor3 = Theme.Accent }) end)
+
+			scrim.MouseButton1Click:Connect(function() end) -- eat clicks to the menu behind
+			skipBtn.MouseButton1Click:Connect(function() finish(true) end)
+			backBtn.MouseButton1Click:Connect(function() if index > 0 then show(index - 1, -1) end end)
+			nextBtn.MouseButton1Click:Connect(function()
+				if index >= #steps - 1 then finish(false) else show(index + 1, 1) end
+			end)
+		end
+
+		function handle:Start(startIndex)
+			if active then return end
+			if #steps == 0 then return end
+			active = true
+			build()
+			tween(scrim, TI_MED, { BackgroundTransparency = 0.45 })
+			tween(overlay, TI_MED, { GroupTransparency = 0 })
+			tween(cardScale, TI_SMOOTH, { Scale = 1 })
+			show((tonumber(startIndex) or 1) - 1, 1)
+		end
+		function handle:Stop() finish(true) end
+		function handle:IsActive() return active end
+		function handle:Step() return index + 1 end
+
+		if TutorialSettings.AutoStart then
+			task.delay(TutorialSettings.Delay or 0.6, function() handle:Start() end)
+		end
+		return handle
 	end
 
 	local hasLoading = (Settings.LoadingTitle and Settings.LoadingTitle ~= "") or (Settings.LoadingSubtitle and Settings.LoadingSubtitle ~= "")
