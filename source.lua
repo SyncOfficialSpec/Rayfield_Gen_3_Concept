@@ -212,6 +212,20 @@ local suppressCallbacks = false
 -- User-added AI API keys, shared by every AI chat and managed from settings.
 -- They stack: chats try them in order and ask before switching when one fails.
 local aiKeys = {}
+
+-- Permanent origin knowledge baked into every AI chat. It rides on every
+-- request as its own system message, so it stays true no matter what the
+-- script author sets as the system prompt, and no matter which API key or
+-- provider is in use (it is never tied to a key). Ask "who made you?" or
+-- "what is this?" and the assistant answers from this.
+local AI_ORIGIN_KNOWLEDGE = table.concat({
+	"About you and where you live (this is permanent background knowledge, always true):",
+	"- You are the built-in assistant inside Rayfield Gen 3 [Concept], a fanmade concept rebuild of the Rayfield UI library for Roblox/Luau.",
+	"- Rayfield Gen 3 was made by Diablo (also known as SyncOfficialSpec). Diablo is your creator and the developer of this menu; when someone asks who made you or who Diablo is, tell them Diablo built you and this whole UI library.",
+	"- Gen 3 is the successor to Rayfield Gen 2 (fanmade), also by Diablo. It is a concept/showcase, not the official Sirius Rayfield.",
+	"- You run inside the menu's top bar and can be opened any time. You answer questions and, when the script author wires up actions, you can do things in-game.",
+	"- Be friendly and concise. This background is permanent and does not change when API keys, models, or system prompts change.",
+}, "\n")
 local function maskKey(k)
 	k = tostring(k)
 	if #k <= 8 then return string.rep("*", #k) end
@@ -2552,6 +2566,690 @@ local function _constructWindow(Settings)
 		end)
 	end
 
+
+	local function buildAIChat(container, ChatSettings)
+		ChatSettings = ChatSettings or {}
+		local sysPrompt = ChatSettings.SystemPrompt
+			or "You are a concise assistant inside a Roblox script menu. Answer briefly and helpfully. Keep answers under 80 words unless asked for more."
+		local model = ChatSettings.Model or "gpt-4o-mini"
+		local endpoint = ChatSettings.Endpoint or "https://api.openai.com/v1/chat/completions"
+		local freeModel = ChatSettings.FreeModel or "openai-fast"
+		local gameAware = ChatSettings.GameAware ~= false
+		local extraContext = ChatSettings.Context
+		-- per-chat keys from the constructor; global keys (added in settings)
+		-- are appended at request time so both stack
+		local ownKeys = {}
+		if type(ChatSettings.Keys) == "table" then
+			for _, k in ipairs(ChatSettings.Keys) do
+				if type(k) == "string" and #k > 0 then table.insert(ownKeys, k) end
+			end
+		end
+		local function allKeys()
+			local t = {}
+			for _, k in ipairs(ownKeys) do t[#t + 1] = k end
+			for _, k in ipairs(aiKeys) do t[#t + 1] = k end
+			return t
+		end
+		local keyCursor = 1      -- position in the current key list
+		local forcedFree = false -- true after the user chooses the free provider
+		local lastKeyCount = -1  -- adding/removing keys re-enables keyed mode
+		local history = {}
+		local busy = false
+		local sendTimes = {}
+
+		-- in-game actions the AI may trigger (script author wires the callbacks)
+		local actions = {}
+		if type(ChatSettings.Actions) == "table" then
+			for _, a in ipairs(ChatSettings.Actions) do
+				if type(a) == "table" and type(a.Name) == "string" and type(a.Callback) == "function" then
+					table.insert(actions, { Name = a.Name, Description = tostring(a.Description or ""), Callback = a.Callback })
+				end
+			end
+		end
+
+		-- live game context so the AI actually knows where it is
+		local cachedGameName
+		local function gameName()
+			if cachedGameName then return cachedGameName end
+			local ok, info = pcall(function()
+				return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+			end)
+			cachedGameName = (ok and type(info) == "table" and info.Name) or nil
+			return cachedGameName
+		end
+		if gameAware then task.spawn(gameName) end -- warm the cache before the first question
+
+		local function buildGameContext()
+			local parts = {}
+			if gameAware then
+				pcall(function()
+					local gn = gameName()
+					table.insert(parts, "Game: " .. (gn or "unknown") .. " (PlaceId " .. tostring(game.PlaceId) .. ")")
+					if LocalPlayer then
+						table.insert(parts, "Local player: " .. LocalPlayer.Name)
+						if LocalPlayer.Team then table.insert(parts, "Team: " .. tostring(LocalPlayer.Team.Name)) end
+					end
+					local names = {}
+					for _, p in ipairs(Players:GetPlayers()) do table.insert(names, p.Name) end
+					table.insert(parts, "Players in server (" .. #names .. "): " .. table.concat(names, ", "))
+					local ch = LocalPlayer and LocalPlayer.Character
+					local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+					if hum then
+						table.insert(parts, string.format("Health %d/%d, WalkSpeed %d, JumpPower %d",
+							math.floor(hum.Health), math.floor(hum.MaxHealth), math.floor(hum.WalkSpeed), math.floor(hum.JumpPower or 0)))
+					end
+					local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+					if hrp then
+						local pos = hrp.Position
+						table.insert(parts, string.format("Position (%.0f, %.0f, %.0f)", pos.X, pos.Y, pos.Z))
+					end
+				end)
+			end
+			if type(extraContext) == "function" then
+				local ok, extra = pcall(extraContext)
+				if ok and type(extra) == "string" and #extra > 0 then table.insert(parts, extra) end
+			elseif type(extraContext) == "string" and #extraContext > 0 then
+				table.insert(parts, extraContext)
+			end
+			if #parts == 0 then return nil end
+			return "Live game state right now (use it to answer):\n" .. table.concat(parts, "\n")
+		end
+
+		local function actionPrompt()
+			if #actions == 0 then return nil end
+			local lines = { "You can run in-game actions when the user asks you to do something. Available actions:" }
+			for _, a in ipairs(actions) do
+				table.insert(lines, "- " .. a.Name .. (a.Description ~= "" and (": " .. a.Description) or ""))
+			end
+			table.insert(lines, 'To run one, put [ACTION:name arguments] on its own in your reply plus one short confirmation sentence. Only use listed actions, never invent one.')
+			return table.concat(lines, "\n")
+		end
+
+		local card = container
+
+		-- header: bot icon, title, provider hint
+		local headIcon = makeIcon(card, "bot", 18, Theme.TextTitle, 0.04)
+		if headIcon then
+			headIcon.AnchorPoint = Vector2.new(0, 0.5)
+			headIcon.Position = UDim2.fromOffset(16, 23)
+		end
+		local headLabel = create("TextLabel", {
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(44, 13),
+			Size = UDim2.new(1, -160, 0, 20),
+			Font = FONT_BOLD,
+			TextSize = 16,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Text = ChatSettings.Name or "AI Chat",
+			Parent = card,
+		})
+		paint(headLabel, "TextColor3", "TextTitle")
+		local providerLabel = create("TextLabel", {
+			BackgroundTransparency = 1,
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -16, 0, 16),
+			Size = UDim2.new(0, 110, 0, 14),
+			Font = FONT_MEDIUM,
+			TextSize = 12,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			Text = (#allKeys() > 0) and "key 1" or "built in",
+			Parent = card,
+		})
+		paint(providerLabel, "TextColor3", "TextMuted")
+		if ChatSettings._headerRightInset then providerLabel.Position = UDim2.new(1, -16 - ChatSettings._headerRightInset, 0, 16) end
+
+		-- messages
+		local INPUT_H = 40
+		-- CanvasGroup + gradient so the messages fade out at the scroll edges
+		local msgsWrap = create("CanvasGroup", {
+			BackgroundTransparency = 1,
+			GroupTransparency = 0,
+			Position = UDim2.fromOffset(12, 44),
+			Size = UDim2.new(1, -24, 1, -44 - INPUT_H - 20),
+			Parent = card,
+		})
+		local msgsFade = create("UIGradient", { Rotation = 90, Parent = msgsWrap })
+		local msgs = create("ScrollingFrame", {
+			BackgroundTransparency = 1,
+			Size = UDim2.fromScale(1, 1),
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			ScrollBarThickness = 0,
+			BorderSizePixel = 0,
+			Parent = msgsWrap,
+		})
+		create("UIListLayout", {
+			FillDirection = Enum.FillDirection.Vertical,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, 8),
+			Parent = msgs,
+		})
+		padAll(msgs, 2, 4, 6, 2)
+
+		local FADE_EDGE = 0.06
+		local function updateMsgFade()
+			local vh = msgs.AbsoluteWindowSize.Y
+			if vh <= 0 then return end
+			local pos = msgs.CanvasPosition.Y
+			local maxScroll = math.max(0, msgs.AbsoluteCanvasSize.Y - vh)
+			local topT = math.clamp(pos / 22, 0, 1)
+			local botT = math.clamp((maxScroll - pos) / 22, 0, 1)
+			if topT <= 0.001 and botT <= 0.001 then
+				msgsFade.Transparency = NumberSequence.new(0)
+			else
+				msgsFade.Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, topT),
+					NumberSequenceKeypoint.new(FADE_EDGE, 0),
+					NumberSequenceKeypoint.new(1 - FADE_EDGE, 0),
+					NumberSequenceKeypoint.new(1, botT),
+				})
+			end
+		end
+		msgs:GetPropertyChangedSignal("CanvasPosition"):Connect(updateMsgFade)
+		msgs:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(updateMsgFade)
+		msgs:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(updateMsgFade)
+		task.defer(updateMsgFade)
+
+		local msgOrder = 0
+		local function scrollBottom()
+			task.defer(function()
+				if msgs.Parent then
+					msgs.CanvasPosition = Vector2.new(0, math.max(0, msgs.AbsoluteCanvasSize.Y - msgs.AbsoluteSize.Y))
+				end
+				task.defer(updateMsgFade)
+			end)
+		end
+
+		local function textOnAccent()
+			local c = Theme.Accent
+			local lum = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B
+			return lum > 0.6 and Color3.fromRGB(20, 20, 20) or Color3.fromRGB(245, 245, 245)
+		end
+
+		-- one chat bubble; user bubbles sit right in accent, AI bubbles left
+		-- minimal markdown -> RichText so model replies render nicely
+		local function mdToRich(t)
+			t = tostring(t)
+			t = t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+			t = t:gsub("%*%*([^\n*]+)%*%*", "<b>%1</b>")
+			t = t:gsub("([^%*])%*([^\n*]+)%*([^%*])", "%1<i>%2</i>%3")
+			t = t:gsub("`([^\n`]+)`", "<b>%1</b>")
+			return t
+		end
+
+		local function addBubble(text, isUser, muted)
+			msgOrder += 1
+			local row = create("Frame", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.Y,
+				Size = UDim2.new(1, 0, 0, 10),
+				LayoutOrder = msgOrder,
+				Parent = msgs,
+			})
+			local bubble = create("Frame", {
+				AnchorPoint = Vector2.new(isUser and 1 or 0, 0),
+				Position = isUser and UDim2.new(1, 0, 0, 0) or UDim2.new(0, 0, 0, 0),
+				AutomaticSize = Enum.AutomaticSize.XY,
+				BackgroundColor3 = isUser and Theme.Accent or Theme.CardHover,
+				Parent = row,
+			})
+			round(bubble, 12)
+			padAll(bubble, 8, 12, 8, 12)
+			local scale = create("UIScale", { Scale = 0.86, Parent = bubble })
+			local label = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.XY,
+				Size = UDim2.new(0, 0, 0, 0),
+				Font = FONT_MEDIUM,
+				TextSize = 14,
+				LineHeight = 1.15,
+				RichText = true,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextWrapped = true,
+				TextTransparency = 1,
+				Text = mdToRich(text),
+				TextColor3 = isUser and textOnAccent() or (muted and Theme.TextMuted or Theme.TextBody),
+				Parent = bubble,
+			})
+			create("UISizeConstraint", { MaxSize = Vector2.new(300, math.huge), Parent = label })
+			tween(scale, TweenInfo.new(0.24, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
+			tween(label, TI_MED, { TextTransparency = 0 })
+			scrollBottom()
+			local B = {}
+			function B.setText(t, asMuted)
+				label.Text = mdToRich(t)
+				label.TextColor3 = isUser and textOnAccent() or (asMuted and Theme.TextMuted or Theme.TextBody)
+				scrollBottom()
+			end
+			return B
+		end
+
+		-- input row: rounded box plus a circular accent send button
+		local inputHolder = create("Frame", {
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 14, 1, -12),
+			Size = UDim2.new(1, -14 - 14 - INPUT_H - 8, 0, INPUT_H - 4),
+			Parent = card,
+		})
+		paint(inputHolder, "BackgroundColor3", "CardInset")
+		roundFull(inputHolder)
+		create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Parent = inputHolder })
+		local box = create("TextBox", {
+			BackgroundTransparency = 1,
+			Position = UDim2.fromOffset(14, 0),
+			Size = UDim2.new(1, -24, 1, 0),
+			Font = FONT_MEDIUM,
+			TextSize = 14,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			PlaceholderText = ChatSettings.Placeholder or "Ask anything",
+			PlaceholderColor3 = Theme.TextMuted,
+			Text = "",
+			ClearTextOnFocus = false,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			Parent = inputHolder,
+		})
+		paint(box, "TextColor3", "TextBody")
+		local sendBtn = create("TextButton", {
+			AnchorPoint = Vector2.new(1, 1),
+			Position = UDim2.new(1, -14, 1, -14),
+			Size = UDim2.fromOffset(INPUT_H - 4, INPUT_H - 4),
+			Text = "",
+			BackgroundColor3 = Theme.Accent,
+			Parent = card,
+		})
+		roundFull(sendBtn)
+		local sendIcon = makeIcon(sendBtn, "arrow-up", 18, textOnAccent())
+		if sendIcon then
+			sendIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+			sendIcon.Position = UDim2.fromScale(0.5, 0.5)
+		end
+
+		-- context the model sees
+		local function buildMessages()
+			local out = { { role = "system", content = AI_ORIGIN_KNOWLEDGE }, { role = "system", content = sysPrompt } }
+			local gc = buildGameContext()
+			if gc then table.insert(out, { role = "system", content = gc }) end
+			local ap = actionPrompt()
+			if ap then table.insert(out, { role = "system", content = ap }) end
+			for _, m in ipairs(history) do table.insert(out, m) end
+			return out
+		end
+
+		-- pull the reply out of a response body, and never mistake a provider
+		-- error payload ({"error":...}, "Queue full", ...) for an answer
+		local function parseChatBody(body)
+			if type(body) ~= "string" or #body == 0 then return nil, "empty response" end
+			local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+			if ok and type(data) == "table" then
+				if data.error ~= nil then
+					local msg = type(data.error) == "table" and (data.error.message or "provider error") or tostring(data.error)
+					if string.find(string.lower(msg), "queue full") then msg = "the free AI is busy" end
+					return nil, msg
+				end
+				local content = data.choices and data.choices[1] and data.choices[1].message and data.choices[1].message.content
+				if type(content) == "string" and #content > 0 then return content end
+				return nil, "empty response"
+			end
+			-- plain-text reply; reject bodies that are obviously error blobs
+			local low = string.lower(body)
+			if string.find(body, '"error"', 1, true) or string.find(low, "queue full", 1, true) then
+				return nil, "the free AI is busy"
+			end
+			return body
+		end
+
+		local function keyedRequest(key)
+			local res, rerr = httpPost(endpoint, {
+				["Content-Type"] = "application/json",
+				["Authorization"] = "Bearer " .. key,
+			}, { model = model, messages = buildMessages(), max_tokens = 350, temperature = 0.7 })
+			if not res then return nil, rerr or "request failed", false end
+			local code = tonumber(res.StatusCode or res.status_code) or 0
+			if code == 401 or code == 402 or code == 403 or code == 429 then
+				return nil, "HTTP " .. code, true -- key problem: exhausted/invalid/rate limited
+			end
+			if code < 200 or code >= 300 then return nil, "HTTP " .. code, false end
+			return parseChatBody(res.Body)
+		end
+
+		local function freePost(withModel)
+			local res, rerr = httpPost("https://text.pollinations.ai/openai", {
+				["Content-Type"] = "application/json",
+			}, { model = withModel, messages = buildMessages(), private = true })
+			if not res then return nil, rerr or "request failed" end
+			local code = tonumber(res.StatusCode or res.status_code) or 0
+			if code < 200 or code >= 300 then
+				local _, perr = parseChatBody(res.Body or "")
+				return nil, perr or ("HTTP " .. code)
+			end
+			return parseChatBody(res.Body)
+		end
+
+		local function freeRequest()
+			local altModel = freeModel ~= "openai" and "openai" or "mistral"
+			-- primary model, one backoff retry (queue-full clears quickly), then the alternate
+			local plan = {
+				{ model = freeModel },
+				{ model = freeModel, wait = 2.5 },
+				{ model = altModel },
+			}
+			local lastErr = "the free AI service is unreachable"
+			for _, step in ipairs(plan) do
+				if step.wait then task.wait(step.wait) end
+				local reply, err = freePost(step.model)
+				if reply then return reply end
+				if err then lastErr = err end
+			end
+			-- plain GET last resort: compact transcript in the prompt
+			local lines = { AI_ORIGIN_KNOWLEDGE, sysPrompt }
+			local gc = buildGameContext()
+			if gc then table.insert(lines, gc) end
+			for _, m in ipairs(history) do
+				table.insert(lines, (m.role == "user" and "User: " or "Assistant: ") .. m.content)
+			end
+			table.insert(lines, "Assistant:")
+			local raw = fetch("https://text.pollinations.ai/" .. HttpService:UrlEncode(table.concat(lines, "\n")))
+			if raw then
+				local reply, err = parseChatBody(raw)
+				if reply then return reply end
+				if err then lastErr = err end
+			end
+			return nil, lastErr
+		end
+
+		-- blocking yes/no through the dialog. Closing with the X counts as no,
+		-- and a 30s timeout closes the dialog and counts as no.
+		local function askSwitch(title, content, yesText)
+			if not msgs.Parent then return false end -- UI is gone, never resurrect a dialog
+			local result = nil
+			local handle = RayfieldLibrary:Dialog({
+				Title = title,
+				Content = content,
+				OnClose = function()
+					if result == nil then result = false end
+				end,
+				Options = {
+					{ Text = "Cancel", Callback = function() result = false end },
+					{ Text = yesText, Primary = true, Callback = function() result = true end },
+				},
+			})
+			local t0 = os.clock()
+			while result == nil and os.clock() - t0 < 30 do task.wait(0.1) end
+			if result == nil and handle then pcall(handle.Close) end
+			return result == true
+		end
+
+		local function pushHistory(role, content)
+			table.insert(history, { role = role, content = content })
+			while #history > 10 do table.remove(history, 1) end
+		end
+
+		-- bumped by Clear(); in-flight replies from an older epoch are dropped
+		local chatEpoch = 0
+
+		local function send(text)
+			text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+			if text == "" then return end
+			if busy then
+				addBubble("One message at a time, please.", false, true)
+				return
+			end
+			-- adding/removing keys re-enables keyed mode from the top
+			local kcount = #allKeys()
+			if kcount ~= lastKeyCount then
+				lastKeyCount = kcount
+				forcedFree = false
+				keyCursor = 1
+			end
+			local usingKeys = (not forcedFree) and kcount > 0
+			providerLabel.Text = usingKeys and ("key " .. keyCursor) or "built in"
+
+			-- rate limit (tighter on the free provider)
+			local now = os.clock()
+			local minGap = usingKeys and 1.5 or 4
+			local perMin = usingKeys and 20 or 8
+			for i = #sendTimes, 1, -1 do
+				if now - sendTimes[i] > 60 then table.remove(sendTimes, i) end
+			end
+			if (#sendTimes > 0 and now - sendTimes[#sendTimes] < minGap) or #sendTimes >= perMin then
+				addBubble("Slow down a little, then try again.", false, true)
+				return
+			end
+			table.insert(sendTimes, now)
+
+			busy = true
+			box.Text = ""
+			addBubble(text, true)
+			pushHistory("user", text)
+
+			local thinking = addBubble("\u{00B7}", false, true)
+			local thinkAlive = true
+			local myEpoch = chatEpoch
+			task.spawn(function()
+				local i = 0
+				local frames = { "\u{00B7}", "\u{00B7}\u{00B7}", "\u{00B7}\u{00B7}\u{00B7}" }
+				while thinkAlive and msgs.Parent and chatEpoch == myEpoch do
+					i = i % 3 + 1
+					thinking.setText(frames[i], true)
+					task.wait(0.35)
+				end
+			end)
+
+			task.spawn(function()
+				local reply, err
+				while true do
+					if not msgs.Parent or chatEpoch ~= myEpoch then break end -- UI gone or cleared
+					local kl = allKeys()
+					if usingKeys and kl[keyCursor] then
+						local keyFail
+						reply, err, keyFail = keyedRequest(kl[keyCursor])
+						if reply or not keyFail then break end
+						if not msgs.Parent or chatEpoch ~= myEpoch then break end -- cleared/destroyed while requesting
+						if keyCursor < #kl then
+							if askSwitch("API key " .. keyCursor .. " failed",
+								"That key returned " .. tostring(err) .. ". Switch to key " .. (keyCursor + 1) .. " and retry?",
+								"Switch") then
+								keyCursor += 1
+								providerLabel.Text = "key " .. keyCursor
+							else break end
+						else
+							if askSwitch("All API keys failed",
+								"The last key returned " .. tostring(err) .. ". Use the free built-in AI instead?",
+								"Use free") then
+								usingKeys = false
+								forcedFree = true
+								providerLabel.Text = "built in"
+							else break end
+						end
+					else
+						reply, err = freeRequest()
+						break
+					end
+				end
+				thinkAlive = false
+				busy = false
+				-- drop the reply if the chat was cleared or destroyed meanwhile
+				if not msgs.Parent or chatEpoch ~= myEpoch then return end
+				if reply then
+					reply = tostring(reply):gsub("^%s+", ""):gsub("%s+$", "")
+					-- run any [ACTION:name args] the model emitted, then strip them
+					local ran = {}
+					if #actions > 0 then
+						reply = reply:gsub("%[ACTION:%s*([%w_%-]+)%s*([^%]]*)%]", function(aname, aargs)
+							for _, a in ipairs(actions) do
+								if string.lower(a.Name) == string.lower(aname) then
+									table.insert(ran, a.Name)
+									task.spawn(function()
+										local ok, aerr = pcall(a.Callback, (aargs:gsub("^%s+", "")):gsub("%s+$", ""))
+										if not ok then warn("Rayfield Gen3 | AI action error: " .. tostring(aerr)) end
+									end)
+									break
+								end
+							end
+							return ""
+						end)
+						reply = reply:gsub("%s+$", ""):gsub("^%s+", "")
+					end
+					if reply == "" then reply = "Done." end
+					thinking.setText(reply, false)
+					pushHistory("assistant", reply)
+					if #ran > 0 then
+						addBubble("Ran: " .. table.concat(ran, ", "), false, true)
+					end
+				else
+					thinking.setText("Could not reply: " .. tostring(err or "unknown error"), true)
+				end
+			end)
+		end
+
+		sendBtn.MouseButton1Click:Connect(function()
+			tween(sendBtn, TweenInfo.new(0.07, Enum.EasingStyle.Quad), { BackgroundColor3 = Theme.AccentSoft })
+			task.delay(0.09, function() tween(sendBtn, TI_MED, { BackgroundColor3 = Theme.Accent }) end)
+			send(box.Text)
+		end)
+		box.FocusLost:Connect(function(enterPressed)
+			if enterPressed then send(box.Text) end
+		end)
+
+		if ChatSettings.Greeting ~= false then
+			addBubble(type(ChatSettings.Greeting) == "string" and ChatSettings.Greeting or "Hi! Ask me anything.", false)
+		end
+
+		local AIChat = { Type = "AIChat" }
+		function AIChat:Ask(text) send(text) end
+		function AIChat:AddKey(key)
+			if type(key) == "string" and #key > 0 then
+				table.insert(ownKeys, key)
+				forcedFree = false -- prefer keys again
+				providerLabel.Text = "key 1"
+			end
+		end
+		function AIChat:Clear()
+			chatEpoch += 1 -- invalidates any in-flight reply
+			history = {}
+			busy = false
+			for _, c in ipairs(msgs:GetChildren()) do
+				if c:IsA("GuiObject") then c:Destroy() end
+			end
+			msgOrder = 0
+		end
+		function AIChat:SetSystemPrompt(p)
+			if type(p) == "string" then sysPrompt = p end
+		end
+		function AIChat:RegisterAction(name, description, callback)
+			if type(name) == "string" and type(callback) == "function" then
+				table.insert(actions, { Name = name, Description = tostring(description or ""), Callback = callback })
+			end
+		end
+		function AIChat:SetContext(ctx)
+			extraContext = ctx
+		end
+		return AIChat
+	end
+
+	-- Built-in assistant, reachable from the top bar and on by default. Pass
+	-- Settings.AI = false to remove it, or Settings.AI = { ...AIChat settings }
+	-- to configure it. Its origin knowledge is baked in permanently, so it
+	-- knows who made it no matter what keys or prompt the author sets.
+	do
+		local aiConfig = Settings.AI
+		if aiConfig ~= false then
+			if type(aiConfig) ~= "table" then aiConfig = {} end
+			aiConfig.Name = aiConfig.Name or "Assistant"
+			aiConfig._headerRightInset = 40
+
+			-- top-bar button, accent tinted so it reads as the assistant
+			local aiButton = create("TextButton", {
+				BackgroundTransparency = 1, Text = "",
+				Size = UDim2.fromOffset(30, 30), LayoutOrder = 0, Parent = buttonRow,
+			})
+			local aiIcon = create("ImageLabel", {
+				BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(20, 20),
+				ImageColor3 = Theme.Accent, Parent = aiButton,
+			})
+			applyLucide(aiIcon, {"sparkles"})
+			paint(aiIcon, "ImageColor3", "Accent")
+
+			local built, overlay, scrim, panel, panelScale, isOpen = false, nil, nil, nil, nil, false
+			local setOpen
+
+			local OPEN_Y = HEADER_H - 8
+			local function build()
+				-- a plain container (not a CanvasGroup) so we never nest CanvasGroups
+				-- around the chat's inner scroll-fade group, which triggers the
+				-- engine's individual-draw fallback warning
+				overlay = create("Frame", {
+					Name = "Assistant",
+					BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1),
+					Visible = false,
+					ZIndex = 925,
+					Parent = window,
+				})
+				scrim = create("TextButton", {
+					Text = "", AutoButtonColor = false,
+					BackgroundColor3 = Color3.fromRGB(6, 6, 8), BackgroundTransparency = 1,
+					Size = UDim2.fromScale(1, 1), ZIndex = 1, Parent = overlay,
+				})
+				round(scrim, GenStyle.windowCorner) -- match the window's rounded corners
+				panel = create("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0),
+					Position = UDim2.new(0.5, 0, 0, OPEN_Y),
+					Size = UDim2.new(1, -24, 1, -HEADER_H - 18),
+					BackgroundColor3 = Theme.Card, ZIndex = 3, Parent = overlay,
+				})
+				paint(panel, "BackgroundColor3", "Card")
+				cardBase(panel)
+				panelScale = create("UIScale", { Scale = 0.92, Parent = panel })
+				-- close X, sitting in the header space we reserved on the right
+				local closeBtn = create("TextButton", {
+					BackgroundTransparency = 1, Text = "",
+					AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -12, 0, 12),
+					Size = UDim2.fromOffset(26, 26), ZIndex = 8, Parent = panel,
+				})
+				local closeIcon = makeIcon(closeBtn, "x", 16, Theme.TextSub)
+				if closeIcon then
+					closeIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+					closeIcon.Position = UDim2.fromScale(0.5, 0.5)
+					closeIcon.ZIndex = 8
+				end
+				closeBtn.MouseEnter:Connect(function() if closeIcon then tween(closeIcon, TI_FAST, { ImageColor3 = Theme.TextTitle }) end end)
+				closeBtn.MouseLeave:Connect(function() if closeIcon then tween(closeIcon, TI_FAST, { ImageColor3 = Theme.TextSub }) end end)
+				closeBtn.MouseButton1Click:Connect(function() setOpen(false) end)
+				scrim.MouseButton1Click:Connect(function() setOpen(false) end)
+				buildAIChat(panel, aiConfig)
+				built = true
+			end
+
+			function setOpen(state)
+				if state and not built then build() end
+				isOpen = state and true or false
+				if not overlay then return end
+				if isOpen then
+					overlay.Visible = true
+					panel.Position = UDim2.new(0.5, 0, 0, OPEN_Y + 12) -- slide-down start
+					tween(scrim, TI_MED, { BackgroundTransparency = 0.4 })
+					tween(panelScale, TI_SMOOTH, { Scale = 1 })
+					tween(panel, TI_SMOOTH, { Position = UDim2.new(0.5, 0, 0, OPEN_Y) })
+					tween(aiIcon, TI_FAST, { ImageColor3 = Theme.AccentSoft or Theme.Accent })
+				else
+					tween(scrim, TI_MED, { BackgroundTransparency = 1 })
+					tween(panelScale, TI_MED, { Scale = 0.92 })
+					tween(panel, TI_MED, { Position = UDim2.new(0.5, 0, 0, OPEN_Y + 12) })
+					tween(aiIcon, TI_FAST, { ImageColor3 = Theme.Accent })
+					local o = overlay
+					task.delay(0.28, function() if not isOpen and o then o.Visible = false end end)
+				end
+			end
+
+			aiButton.MouseEnter:Connect(function() if not isOpen then tween(aiIcon, TI_FAST, { ImageColor3 = Theme.AccentSoft or Theme.Accent }) end end)
+			aiButton.MouseLeave:Connect(function() if not isOpen then tween(aiIcon, TI_FAST, { ImageColor3 = Theme.Accent }) end end)
+			aiButton.MouseButton1Click:Connect(function() setOpen(not isOpen) end)
+		end
+	end
 
 	local function buildTabAPI(page, compact)
 		local Tab = {}
@@ -7005,22 +7703,67 @@ local function _constructWindow(Settings)
 				Parent = card,
 			})
 
+			-- a confirm checkmark that pops in on completion (sits on the right so
+			-- it never covers the label)
+			local checkIcon = makeIcon(card, "check", 20, Theme.Accent, 1)
+			local checkScale
+			if checkIcon then
+				checkIcon.AnchorPoint = Vector2.new(1, 0.5)
+				checkIcon.Position = UDim2.new(1, -16, 0.5, 0)
+				checkIcon.ZIndex = 4
+				checkScale = create("UIScale", { Scale = 0.5, Parent = checkIcon })
+			end
+
 			local holding, token = false, 0
 			local function reset(animate)
 				tween(fill, animate and TI_MED or TweenInfo.new(0), {Size = UDim2.new(0, 0, 1, 0), BackgroundTransparency = 0.55})
 			end
+
+			-- plays exactly once when the hold is completed, then fully clears
+			-- itself; it never replays on its own, only a fresh hold restarts it
+			local function complete(myToken)
+				-- flash the full fill bright, then dissolve it away (not shrink)
+				tween(fill, TweenInfo.new(0.08, Enum.EasingStyle.Quad), {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 0.03})
+				task.delay(0.1, function()
+					if myToken ~= token then return end
+					tween(fill, TI_MED, {BackgroundTransparency = 1})
+					task.delay(0.3, function()
+						if myToken == token then reset(false) end
+					end)
+				end)
+				-- checkmark pop
+				if checkIcon and checkScale then
+					checkScale.Scale = 0.5
+					checkIcon.ImageTransparency = 1
+					tween(checkScale, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1})
+					tween(checkIcon, TI_FAST, {ImageTransparency = 0})
+					task.delay(0.55, function()
+						if checkIcon and myToken == token then tween(checkIcon, TI_MED, {ImageTransparency = 1}) end
+					end)
+				end
+				-- professional completion notification (opt out with Notify = false)
+				if HoldSettings.Notify ~= false then
+					RayfieldLibrary:Notify({
+						Title = HoldSettings.CompletionTitle or HoldSettings.Name or "Confirmed",
+						Content = HoldSettings.CompletionText or "Hold complete.",
+						Duration = HoldSettings.NotifyDuration or 3,
+						Icon = HoldSettings.CompletionIcon or "circle-check",
+					})
+				end
+				runCallback(HoldSettings.Callback)
+			end
+
 			clicker.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 					holding = true
 					token += 1
 					local myToken = token
-					tween(fill, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Size = UDim2.fromScale(1, 1)})
+					-- sweep the fill and firm it up slightly as it goes
+					tween(fill, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 0.35})
 					task.delay(duration, function()
 						if holding and myToken == token then
 							holding = false
-							tween(fill, TI_FAST, {BackgroundTransparency = 0.2})
-							task.delay(0.14, function() reset(true) end)
-							runCallback(HoldSettings.Callback)
+							complete(myToken)
 						end
 					end)
 				end
@@ -7480,102 +8223,6 @@ local function _constructWindow(Settings)
 		function Tab:CreateAIChat(ChatSettings)
 			ChatSettings = ChatSettings or {}
 			local HEIGHT = math.clamp(tonumber(ChatSettings.Height) or 300, 220, 480)
-			local sysPrompt = ChatSettings.SystemPrompt
-				or "You are a concise assistant inside a Roblox script menu. Answer briefly and helpfully. Keep answers under 80 words unless asked for more."
-			local model = ChatSettings.Model or "gpt-4o-mini"
-			local endpoint = ChatSettings.Endpoint or "https://api.openai.com/v1/chat/completions"
-			local freeModel = ChatSettings.FreeModel or "openai-fast"
-			local gameAware = ChatSettings.GameAware ~= false
-			local extraContext = ChatSettings.Context
-			-- per-chat keys from the constructor; global keys (added in settings)
-			-- are appended at request time so both stack
-			local ownKeys = {}
-			if type(ChatSettings.Keys) == "table" then
-				for _, k in ipairs(ChatSettings.Keys) do
-					if type(k) == "string" and #k > 0 then table.insert(ownKeys, k) end
-				end
-			end
-			local function allKeys()
-				local t = {}
-				for _, k in ipairs(ownKeys) do t[#t + 1] = k end
-				for _, k in ipairs(aiKeys) do t[#t + 1] = k end
-				return t
-			end
-			local keyCursor = 1      -- position in the current key list
-			local forcedFree = false -- true after the user chooses the free provider
-			local lastKeyCount = -1  -- adding/removing keys re-enables keyed mode
-			local history = {}
-			local busy = false
-			local sendTimes = {}
-
-			-- in-game actions the AI may trigger (script author wires the callbacks)
-			local actions = {}
-			if type(ChatSettings.Actions) == "table" then
-				for _, a in ipairs(ChatSettings.Actions) do
-					if type(a) == "table" and type(a.Name) == "string" and type(a.Callback) == "function" then
-						table.insert(actions, { Name = a.Name, Description = tostring(a.Description or ""), Callback = a.Callback })
-					end
-				end
-			end
-
-			-- live game context so the AI actually knows where it is
-			local cachedGameName
-			local function gameName()
-				if cachedGameName then return cachedGameName end
-				local ok, info = pcall(function()
-					return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
-				end)
-				cachedGameName = (ok and type(info) == "table" and info.Name) or nil
-				return cachedGameName
-			end
-			if gameAware then task.spawn(gameName) end -- warm the cache before the first question
-
-			local function buildGameContext()
-				local parts = {}
-				if gameAware then
-					pcall(function()
-						local gn = gameName()
-						table.insert(parts, "Game: " .. (gn or "unknown") .. " (PlaceId " .. tostring(game.PlaceId) .. ")")
-						if LocalPlayer then
-							table.insert(parts, "Local player: " .. LocalPlayer.Name)
-							if LocalPlayer.Team then table.insert(parts, "Team: " .. tostring(LocalPlayer.Team.Name)) end
-						end
-						local names = {}
-						for _, p in ipairs(Players:GetPlayers()) do table.insert(names, p.Name) end
-						table.insert(parts, "Players in server (" .. #names .. "): " .. table.concat(names, ", "))
-						local ch = LocalPlayer and LocalPlayer.Character
-						local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-						if hum then
-							table.insert(parts, string.format("Health %d/%d, WalkSpeed %d, JumpPower %d",
-								math.floor(hum.Health), math.floor(hum.MaxHealth), math.floor(hum.WalkSpeed), math.floor(hum.JumpPower or 0)))
-						end
-						local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-						if hrp then
-							local pos = hrp.Position
-							table.insert(parts, string.format("Position (%.0f, %.0f, %.0f)", pos.X, pos.Y, pos.Z))
-						end
-					end)
-				end
-				if type(extraContext) == "function" then
-					local ok, extra = pcall(extraContext)
-					if ok and type(extra) == "string" and #extra > 0 then table.insert(parts, extra) end
-				elseif type(extraContext) == "string" and #extraContext > 0 then
-					table.insert(parts, extraContext)
-				end
-				if #parts == 0 then return nil end
-				return "Live game state right now (use it to answer):\n" .. table.concat(parts, "\n")
-			end
-
-			local function actionPrompt()
-				if #actions == 0 then return nil end
-				local lines = { "You can run in-game actions when the user asks you to do something. Available actions:" }
-				for _, a in ipairs(actions) do
-					table.insert(lines, "- " .. a.Name .. (a.Description ~= "" and (": " .. a.Description) or ""))
-				end
-				table.insert(lines, 'To run one, put [ACTION:name arguments] on its own in your reply plus one short confirmation sentence. Only use listed actions, never invent one.')
-				return table.concat(lines, "\n")
-			end
-
 			local card = create("Frame", {
 				Size = UDim2.new(1, 0, 0, HEIGHT),
 				LayoutOrder = nextOrder(),
@@ -7584,486 +8231,7 @@ local function _constructWindow(Settings)
 			card:SetAttribute("SearchName", ChatSettings.Name or "AI Chat")
 			paint(card, "BackgroundColor3", "Card")
 			cardBase(card)
-
-			-- header: bot icon, title, provider hint
-			local headIcon = makeIcon(card, "bot", 18, Theme.TextTitle, 0.04)
-			if headIcon then
-				headIcon.AnchorPoint = Vector2.new(0, 0.5)
-				headIcon.Position = UDim2.fromOffset(16, 23)
-			end
-			local headLabel = create("TextLabel", {
-				BackgroundTransparency = 1,
-				Position = UDim2.fromOffset(44, 13),
-				Size = UDim2.new(1, -160, 0, 20),
-				Font = FONT_BOLD,
-				TextSize = 16,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-				Text = ChatSettings.Name or "AI Chat",
-				Parent = card,
-			})
-			paint(headLabel, "TextColor3", "TextTitle")
-			local providerLabel = create("TextLabel", {
-				BackgroundTransparency = 1,
-				AnchorPoint = Vector2.new(1, 0),
-				Position = UDim2.new(1, -16, 0, 16),
-				Size = UDim2.new(0, 110, 0, 14),
-				Font = FONT_MEDIUM,
-				TextSize = 12,
-				TextXAlignment = Enum.TextXAlignment.Right,
-				Text = (#allKeys() > 0) and "key 1" or "built in",
-				Parent = card,
-			})
-			paint(providerLabel, "TextColor3", "TextMuted")
-
-			-- messages
-			local INPUT_H = 40
-			-- CanvasGroup + gradient so the messages fade out at the scroll edges
-			local msgsWrap = create("CanvasGroup", {
-				BackgroundTransparency = 1,
-				GroupTransparency = 0,
-				Position = UDim2.fromOffset(12, 44),
-				Size = UDim2.new(1, -24, 1, -44 - INPUT_H - 20),
-				Parent = card,
-			})
-			local msgsFade = create("UIGradient", { Rotation = 90, Parent = msgsWrap })
-			local msgs = create("ScrollingFrame", {
-				BackgroundTransparency = 1,
-				Size = UDim2.fromScale(1, 1),
-				CanvasSize = UDim2.new(0, 0, 0, 0),
-				AutomaticCanvasSize = Enum.AutomaticSize.Y,
-				ScrollingDirection = Enum.ScrollingDirection.Y,
-				ScrollBarThickness = 0,
-				BorderSizePixel = 0,
-				Parent = msgsWrap,
-			})
-			create("UIListLayout", {
-				FillDirection = Enum.FillDirection.Vertical,
-				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 8),
-				Parent = msgs,
-			})
-			padAll(msgs, 2, 4, 6, 2)
-
-			local FADE_EDGE = 0.06
-			local function updateMsgFade()
-				local vh = msgs.AbsoluteWindowSize.Y
-				if vh <= 0 then return end
-				local pos = msgs.CanvasPosition.Y
-				local maxScroll = math.max(0, msgs.AbsoluteCanvasSize.Y - vh)
-				local topT = math.clamp(pos / 22, 0, 1)
-				local botT = math.clamp((maxScroll - pos) / 22, 0, 1)
-				if topT <= 0.001 and botT <= 0.001 then
-					msgsFade.Transparency = NumberSequence.new(0)
-				else
-					msgsFade.Transparency = NumberSequence.new({
-						NumberSequenceKeypoint.new(0, topT),
-						NumberSequenceKeypoint.new(FADE_EDGE, 0),
-						NumberSequenceKeypoint.new(1 - FADE_EDGE, 0),
-						NumberSequenceKeypoint.new(1, botT),
-					})
-				end
-			end
-			msgs:GetPropertyChangedSignal("CanvasPosition"):Connect(updateMsgFade)
-			msgs:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(updateMsgFade)
-			msgs:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(updateMsgFade)
-			task.defer(updateMsgFade)
-
-			local msgOrder = 0
-			local function scrollBottom()
-				task.defer(function()
-					if msgs.Parent then
-						msgs.CanvasPosition = Vector2.new(0, math.max(0, msgs.AbsoluteCanvasSize.Y - msgs.AbsoluteSize.Y))
-					end
-					task.defer(updateMsgFade)
-				end)
-			end
-
-			local function textOnAccent()
-				local c = Theme.Accent
-				local lum = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B
-				return lum > 0.6 and Color3.fromRGB(20, 20, 20) or Color3.fromRGB(245, 245, 245)
-			end
-
-			-- one chat bubble; user bubbles sit right in accent, AI bubbles left
-			-- minimal markdown -> RichText so model replies render nicely
-			local function mdToRich(t)
-				t = tostring(t)
-				t = t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
-				t = t:gsub("%*%*([^\n*]+)%*%*", "<b>%1</b>")
-				t = t:gsub("([^%*])%*([^\n*]+)%*([^%*])", "%1<i>%2</i>%3")
-				t = t:gsub("`([^\n`]+)`", "<b>%1</b>")
-				return t
-			end
-
-			local function addBubble(text, isUser, muted)
-				msgOrder += 1
-				local row = create("Frame", {
-					BackgroundTransparency = 1,
-					AutomaticSize = Enum.AutomaticSize.Y,
-					Size = UDim2.new(1, 0, 0, 10),
-					LayoutOrder = msgOrder,
-					Parent = msgs,
-				})
-				local bubble = create("Frame", {
-					AnchorPoint = Vector2.new(isUser and 1 or 0, 0),
-					Position = isUser and UDim2.new(1, 0, 0, 0) or UDim2.new(0, 0, 0, 0),
-					AutomaticSize = Enum.AutomaticSize.XY,
-					BackgroundColor3 = isUser and Theme.Accent or Theme.CardHover,
-					Parent = row,
-				})
-				round(bubble, 12)
-				padAll(bubble, 8, 12, 8, 12)
-				local scale = create("UIScale", { Scale = 0.86, Parent = bubble })
-				local label = create("TextLabel", {
-					BackgroundTransparency = 1,
-					AutomaticSize = Enum.AutomaticSize.XY,
-					Size = UDim2.new(0, 0, 0, 0),
-					Font = FONT_MEDIUM,
-					TextSize = 14,
-					LineHeight = 1.15,
-					RichText = true,
-					TextXAlignment = Enum.TextXAlignment.Left,
-					TextWrapped = true,
-					TextTransparency = 1,
-					Text = mdToRich(text),
-					TextColor3 = isUser and textOnAccent() or (muted and Theme.TextMuted or Theme.TextBody),
-					Parent = bubble,
-				})
-				create("UISizeConstraint", { MaxSize = Vector2.new(300, math.huge), Parent = label })
-				tween(scale, TweenInfo.new(0.24, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
-				tween(label, TI_MED, { TextTransparency = 0 })
-				scrollBottom()
-				local B = {}
-				function B.setText(t, asMuted)
-					label.Text = mdToRich(t)
-					label.TextColor3 = isUser and textOnAccent() or (asMuted and Theme.TextMuted or Theme.TextBody)
-					scrollBottom()
-				end
-				return B
-			end
-
-			-- input row: rounded box plus a circular accent send button
-			local inputHolder = create("Frame", {
-				AnchorPoint = Vector2.new(0, 1),
-				Position = UDim2.new(0, 14, 1, -12),
-				Size = UDim2.new(1, -14 - 14 - INPUT_H - 8, 0, INPUT_H - 4),
-				Parent = card,
-			})
-			paint(inputHolder, "BackgroundColor3", "CardInset")
-			roundFull(inputHolder)
-			create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Parent = inputHolder })
-			local box = create("TextBox", {
-				BackgroundTransparency = 1,
-				Position = UDim2.fromOffset(14, 0),
-				Size = UDim2.new(1, -24, 1, 0),
-				Font = FONT_MEDIUM,
-				TextSize = 14,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				PlaceholderText = ChatSettings.Placeholder or "Ask anything",
-				PlaceholderColor3 = Theme.TextMuted,
-				Text = "",
-				ClearTextOnFocus = false,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-				Parent = inputHolder,
-			})
-			paint(box, "TextColor3", "TextBody")
-			local sendBtn = create("TextButton", {
-				AnchorPoint = Vector2.new(1, 1),
-				Position = UDim2.new(1, -14, 1, -14),
-				Size = UDim2.fromOffset(INPUT_H - 4, INPUT_H - 4),
-				Text = "",
-				BackgroundColor3 = Theme.Accent,
-				Parent = card,
-			})
-			roundFull(sendBtn)
-			local sendIcon = makeIcon(sendBtn, "arrow-up", 18, textOnAccent())
-			if sendIcon then
-				sendIcon.AnchorPoint = Vector2.new(0.5, 0.5)
-				sendIcon.Position = UDim2.fromScale(0.5, 0.5)
-			end
-
-			-- context the model sees
-			local function buildMessages()
-				local out = { { role = "system", content = sysPrompt } }
-				local gc = buildGameContext()
-				if gc then table.insert(out, { role = "system", content = gc }) end
-				local ap = actionPrompt()
-				if ap then table.insert(out, { role = "system", content = ap }) end
-				for _, m in ipairs(history) do table.insert(out, m) end
-				return out
-			end
-
-			-- pull the reply out of a response body, and never mistake a provider
-			-- error payload ({"error":...}, "Queue full", ...) for an answer
-			local function parseChatBody(body)
-				if type(body) ~= "string" or #body == 0 then return nil, "empty response" end
-				local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
-				if ok and type(data) == "table" then
-					if data.error ~= nil then
-						local msg = type(data.error) == "table" and (data.error.message or "provider error") or tostring(data.error)
-						if string.find(string.lower(msg), "queue full") then msg = "the free AI is busy" end
-						return nil, msg
-					end
-					local content = data.choices and data.choices[1] and data.choices[1].message and data.choices[1].message.content
-					if type(content) == "string" and #content > 0 then return content end
-					return nil, "empty response"
-				end
-				-- plain-text reply; reject bodies that are obviously error blobs
-				local low = string.lower(body)
-				if string.find(body, '"error"', 1, true) or string.find(low, "queue full", 1, true) then
-					return nil, "the free AI is busy"
-				end
-				return body
-			end
-
-			local function keyedRequest(key)
-				local res, rerr = httpPost(endpoint, {
-					["Content-Type"] = "application/json",
-					["Authorization"] = "Bearer " .. key,
-				}, { model = model, messages = buildMessages(), max_tokens = 350, temperature = 0.7 })
-				if not res then return nil, rerr or "request failed", false end
-				local code = tonumber(res.StatusCode or res.status_code) or 0
-				if code == 401 or code == 402 or code == 403 or code == 429 then
-					return nil, "HTTP " .. code, true -- key problem: exhausted/invalid/rate limited
-				end
-				if code < 200 or code >= 300 then return nil, "HTTP " .. code, false end
-				return parseChatBody(res.Body)
-			end
-
-			local function freePost(withModel)
-				local res, rerr = httpPost("https://text.pollinations.ai/openai", {
-					["Content-Type"] = "application/json",
-				}, { model = withModel, messages = buildMessages(), private = true })
-				if not res then return nil, rerr or "request failed" end
-				local code = tonumber(res.StatusCode or res.status_code) or 0
-				if code < 200 or code >= 300 then
-					local _, perr = parseChatBody(res.Body or "")
-					return nil, perr or ("HTTP " .. code)
-				end
-				return parseChatBody(res.Body)
-			end
-
-			local function freeRequest()
-				local altModel = freeModel ~= "openai" and "openai" or "mistral"
-				-- primary model, one backoff retry (queue-full clears quickly), then the alternate
-				local plan = {
-					{ model = freeModel },
-					{ model = freeModel, wait = 2.5 },
-					{ model = altModel },
-				}
-				local lastErr = "the free AI service is unreachable"
-				for _, step in ipairs(plan) do
-					if step.wait then task.wait(step.wait) end
-					local reply, err = freePost(step.model)
-					if reply then return reply end
-					if err then lastErr = err end
-				end
-				-- plain GET last resort: compact transcript in the prompt
-				local lines = { sysPrompt }
-				local gc = buildGameContext()
-				if gc then table.insert(lines, gc) end
-				for _, m in ipairs(history) do
-					table.insert(lines, (m.role == "user" and "User: " or "Assistant: ") .. m.content)
-				end
-				table.insert(lines, "Assistant:")
-				local raw = fetch("https://text.pollinations.ai/" .. HttpService:UrlEncode(table.concat(lines, "\n")))
-				if raw then
-					local reply, err = parseChatBody(raw)
-					if reply then return reply end
-					if err then lastErr = err end
-				end
-				return nil, lastErr
-			end
-
-			-- blocking yes/no through the dialog. Closing with the X counts as no,
-			-- and a 30s timeout closes the dialog and counts as no.
-			local function askSwitch(title, content, yesText)
-				if not msgs.Parent then return false end -- UI is gone, never resurrect a dialog
-				local result = nil
-				local handle = RayfieldLibrary:Dialog({
-					Title = title,
-					Content = content,
-					OnClose = function()
-						if result == nil then result = false end
-					end,
-					Options = {
-						{ Text = "Cancel", Callback = function() result = false end },
-						{ Text = yesText, Primary = true, Callback = function() result = true end },
-					},
-				})
-				local t0 = os.clock()
-				while result == nil and os.clock() - t0 < 30 do task.wait(0.1) end
-				if result == nil and handle then pcall(handle.Close) end
-				return result == true
-			end
-
-			local function pushHistory(role, content)
-				table.insert(history, { role = role, content = content })
-				while #history > 10 do table.remove(history, 1) end
-			end
-
-			-- bumped by Clear(); in-flight replies from an older epoch are dropped
-			local chatEpoch = 0
-
-			local function send(text)
-				text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-				if text == "" then return end
-				if busy then
-					addBubble("One message at a time, please.", false, true)
-					return
-				end
-				-- adding/removing keys re-enables keyed mode from the top
-				local kcount = #allKeys()
-				if kcount ~= lastKeyCount then
-					lastKeyCount = kcount
-					forcedFree = false
-					keyCursor = 1
-				end
-				local usingKeys = (not forcedFree) and kcount > 0
-				providerLabel.Text = usingKeys and ("key " .. keyCursor) or "built in"
-
-				-- rate limit (tighter on the free provider)
-				local now = os.clock()
-				local minGap = usingKeys and 1.5 or 4
-				local perMin = usingKeys and 20 or 8
-				for i = #sendTimes, 1, -1 do
-					if now - sendTimes[i] > 60 then table.remove(sendTimes, i) end
-				end
-				if (#sendTimes > 0 and now - sendTimes[#sendTimes] < minGap) or #sendTimes >= perMin then
-					addBubble("Slow down a little, then try again.", false, true)
-					return
-				end
-				table.insert(sendTimes, now)
-
-				busy = true
-				box.Text = ""
-				addBubble(text, true)
-				pushHistory("user", text)
-
-				local thinking = addBubble("\u{00B7}", false, true)
-				local thinkAlive = true
-				local myEpoch = chatEpoch
-				task.spawn(function()
-					local i = 0
-					local frames = { "\u{00B7}", "\u{00B7}\u{00B7}", "\u{00B7}\u{00B7}\u{00B7}" }
-					while thinkAlive and msgs.Parent and chatEpoch == myEpoch do
-						i = i % 3 + 1
-						thinking.setText(frames[i], true)
-						task.wait(0.35)
-					end
-				end)
-
-				task.spawn(function()
-					local reply, err
-					while true do
-						if not msgs.Parent or chatEpoch ~= myEpoch then break end -- UI gone or cleared
-						local kl = allKeys()
-						if usingKeys and kl[keyCursor] then
-							local keyFail
-							reply, err, keyFail = keyedRequest(kl[keyCursor])
-							if reply or not keyFail then break end
-							if not msgs.Parent or chatEpoch ~= myEpoch then break end -- cleared/destroyed while requesting
-							if keyCursor < #kl then
-								if askSwitch("API key " .. keyCursor .. " failed",
-									"That key returned " .. tostring(err) .. ". Switch to key " .. (keyCursor + 1) .. " and retry?",
-									"Switch") then
-									keyCursor += 1
-									providerLabel.Text = "key " .. keyCursor
-								else break end
-							else
-								if askSwitch("All API keys failed",
-									"The last key returned " .. tostring(err) .. ". Use the free built-in AI instead?",
-									"Use free") then
-									usingKeys = false
-									forcedFree = true
-									providerLabel.Text = "built in"
-								else break end
-							end
-						else
-							reply, err = freeRequest()
-							break
-						end
-					end
-					thinkAlive = false
-					busy = false
-					-- drop the reply if the chat was cleared or destroyed meanwhile
-					if not msgs.Parent or chatEpoch ~= myEpoch then return end
-					if reply then
-						reply = tostring(reply):gsub("^%s+", ""):gsub("%s+$", "")
-						-- run any [ACTION:name args] the model emitted, then strip them
-						local ran = {}
-						if #actions > 0 then
-							reply = reply:gsub("%[ACTION:%s*([%w_%-]+)%s*([^%]]*)%]", function(aname, aargs)
-								for _, a in ipairs(actions) do
-									if string.lower(a.Name) == string.lower(aname) then
-										table.insert(ran, a.Name)
-										task.spawn(function()
-											local ok, aerr = pcall(a.Callback, (aargs:gsub("^%s+", "")):gsub("%s+$", ""))
-											if not ok then warn("Rayfield Gen3 | AI action error: " .. tostring(aerr)) end
-										end)
-										break
-									end
-								end
-								return ""
-							end)
-							reply = reply:gsub("%s+$", ""):gsub("^%s+", "")
-						end
-						if reply == "" then reply = "Done." end
-						thinking.setText(reply, false)
-						pushHistory("assistant", reply)
-						if #ran > 0 then
-							addBubble("Ran: " .. table.concat(ran, ", "), false, true)
-						end
-					else
-						thinking.setText("Could not reply: " .. tostring(err or "unknown error"), true)
-					end
-				end)
-			end
-
-			sendBtn.MouseButton1Click:Connect(function()
-				tween(sendBtn, TweenInfo.new(0.07, Enum.EasingStyle.Quad), { BackgroundColor3 = Theme.AccentSoft })
-				task.delay(0.09, function() tween(sendBtn, TI_MED, { BackgroundColor3 = Theme.Accent }) end)
-				send(box.Text)
-			end)
-			box.FocusLost:Connect(function(enterPressed)
-				if enterPressed then send(box.Text) end
-			end)
-
-			if ChatSettings.Greeting ~= false then
-				addBubble(type(ChatSettings.Greeting) == "string" and ChatSettings.Greeting or "Hi! Ask me anything.", false)
-			end
-
-			local AIChat = { Type = "AIChat" }
-			function AIChat:Ask(text) send(text) end
-			function AIChat:AddKey(key)
-				if type(key) == "string" and #key > 0 then
-					table.insert(ownKeys, key)
-					forcedFree = false -- prefer keys again
-					providerLabel.Text = "key 1"
-				end
-			end
-			function AIChat:Clear()
-				chatEpoch += 1 -- invalidates any in-flight reply
-				history = {}
-				busy = false
-				for _, c in ipairs(msgs:GetChildren()) do
-					if c:IsA("GuiObject") then c:Destroy() end
-				end
-				msgOrder = 0
-			end
-			function AIChat:SetSystemPrompt(p)
-				if type(p) == "string" then sysPrompt = p end
-			end
-			function AIChat:RegisterAction(name, description, callback)
-				if type(name) == "string" and type(callback) == "function" then
-					table.insert(actions, { Name = name, Description = tostring(description or ""), Callback = callback })
-				end
-			end
-			function AIChat:SetContext(ctx)
-				extraContext = ctx
-			end
-			return AIChat
+			return buildAIChat(card, ChatSettings)
 		end
 
 		-- Elements on demand: every factory's handle gains :SetVisible(state) so

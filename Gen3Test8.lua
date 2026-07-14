@@ -7,6 +7,19 @@ local Window = Rayfield:CreateWindow({
 	Badge = { Text = "phase 8", Icon = "flask-conical" },
 	TabStyle = "Accent",
 	ConfigurationSaving = { Enabled = true, FolderName = "Gen3Test8", FileName = "cfg" },
+	-- The assistant lives in the top bar by default (the sparkles icon). It
+	-- permanently knows it was made by Diablo and that this is Gen3, no matter
+	-- what prompt or API keys are set. Pass AI = false to remove it.
+	AI = {
+		SystemPrompt = "You are the friendly Gen3 assistant. Keep answers short.",
+		Actions = {
+			{ Name = "jump", Description = "make the player's character jump once", Callback = function()
+				local ch = game.Players.LocalPlayer.Character
+				local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+				if hum then hum.Jump = true end
+			end },
+		},
+	},
 })
 
 local Home = Window:CreateTab("Home", "house")
@@ -44,6 +57,24 @@ local Weapon = Home:CreateDropdown({
 })
 
 local More = Window:CreateTab("More", "sliders-horizontal")
+
+-- Hold button: proper completion effect (flash + checkmark) and a notification;
+-- the effect plays once and resets, never replays unless you hold again
+More:CreateSection("Hold to confirm")
+More:CreateHoldButton({
+	Name = "Hold to wipe save",
+	Icon = "trash-2",
+	Duration = 1,
+	CompletionText = "Save wiped.",
+	Callback = function() end,
+})
+
+More:CreateSection("Assistant")
+More:CreateParagraph({
+	Title = "Ask the assistant",
+	Content = "Click the sparkles icon in the top bar. Ask it: who made you? what is this? Then say: make me jump. It always knows Diablo made it and this is Gen3, even if you change API keys.",
+})
+
 More:CreateSection("Tutorial")
 More:CreateParagraph({
 	Title = "Get Started tour",
@@ -71,6 +102,8 @@ Tour = Window:CreateTutorial({
 			Content = "Hide text or whole elements behind a cover. Tap the cover to reveal, tap the eye to hide." },
 		{ Title = "Cleaner dropdowns", Icon = "search", Target = Weapon and Weapon.Card,
 			Content = "No more scrollbar, and the search hides behind the little icon until you want it." },
+		{ Title = "Meet the assistant", Icon = "sparkles",
+			Content = "The sparkles icon in the top bar opens the built-in assistant. It knows it was made by Diablo and can answer or run actions." },
 		{ Title = "You're ready", Icon = "check",
 			Content = "That's everything new. Press Finish and start building." },
 	},
