@@ -67,6 +67,8 @@ Home:CreateSection("Transparency and blur")
 Home:CreateToggle({ Name = "Acrylic blur", Icon = "sparkles", CurrentValue = true, Callback = function(s) Window:SetAcrylic(s) end })
 
 -- Built-in AI: free and rate limited out of the box, no key needed.
+-- Game aware: it knows the game, your player, health, position, and who is in
+-- the server. Actions let it actually DO things you ask for.
 -- Pass Keys = { "sk-...", "sk-..." } to use your own; they stack, and the chat
 -- asks before switching keys when one fails.
 local AITab = Window:CreateTab("AI", "bot")
@@ -75,6 +77,23 @@ AITab:CreateAIChat({
 	Height = 320,
 	SystemPrompt = "You are a friendly, concise assistant inside a Roblox menu.",
 	-- Keys = { "sk-your-key-1", "sk-your-key-2" },
+	Actions = {
+		{ Name = "jump", Description = "Make the player's character jump once", Callback = function()
+			local ch = game.Players.LocalPlayer.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			if hum then hum.Jump = true end
+		end },
+		{ Name = "speed", Description = "Set the player's walk speed to the given number", Callback = function(args)
+			local n = tonumber(args)
+			local ch = game.Players.LocalPlayer.Character
+			local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+			if hum and n then hum.WalkSpeed = math.clamp(n, 1, 200) end
+		end },
+	},
+})
+AITab:CreateParagraph({
+	Title = "Try the game awareness",
+	Content = "Ask it: which game am I in? How much health do I have? Who is in the server? Then tell it: make me jump, or set my speed to 50.",
 })
 AITab:CreateParagraph({
 	Title = "Session dashboard",

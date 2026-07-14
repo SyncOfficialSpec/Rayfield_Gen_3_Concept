@@ -7245,9 +7245,13 @@ local function _constructWindow(Settings)
 		function Tab:CreateAIChat(ChatSettings)
 			ChatSettings = ChatSettings or {}
 			local HEIGHT = math.clamp(tonumber(ChatSettings.Height) or 300, 220, 480)
-			local sysPrompt = ChatSettings.SystemPrompt or "You are a concise assistant inside a Roblox script menu. Answer briefly and helpfully."
+			local sysPrompt = ChatSettings.SystemPrompt
+				or "You are a concise assistant inside a Roblox script menu. Answer briefly and helpfully. Keep answers under 80 words unless asked for more."
 			local model = ChatSettings.Model or "gpt-4o-mini"
 			local endpoint = ChatSettings.Endpoint or "https://api.openai.com/v1/chat/completions"
+			local freeModel = ChatSettings.FreeModel or "openai-fast"
+			local gameAware = ChatSettings.GameAware ~= false
+			local extraContext = ChatSettings.Context
 			local keys = {}
 			if type(ChatSettings.Keys) == "table" then
 				for _, k in ipairs(ChatSettings.Keys) do
@@ -7258,6 +7262,74 @@ local function _constructWindow(Settings)
 			local history = {}
 			local busy = false
 			local sendTimes = {}
+
+			-- in-game actions the AI may trigger (script author wires the callbacks)
+			local actions = {}
+			if type(ChatSettings.Actions) == "table" then
+				for _, a in ipairs(ChatSettings.Actions) do
+					if type(a) == "table" and type(a.Name) == "string" and type(a.Callback) == "function" then
+						table.insert(actions, { Name = a.Name, Description = tostring(a.Description or ""), Callback = a.Callback })
+					end
+				end
+			end
+
+			-- live game context so the AI actually knows where it is
+			local cachedGameName
+			local function gameName()
+				if cachedGameName then return cachedGameName end
+				local ok, info = pcall(function()
+					return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId)
+				end)
+				cachedGameName = (ok and type(info) == "table" and info.Name) or nil
+				return cachedGameName
+			end
+			if gameAware then task.spawn(gameName) end -- warm the cache before the first question
+
+			local function buildGameContext()
+				local parts = {}
+				if gameAware then
+					pcall(function()
+						local gn = gameName()
+						table.insert(parts, "Game: " .. (gn or "unknown") .. " (PlaceId " .. tostring(game.PlaceId) .. ")")
+						if LocalPlayer then
+							table.insert(parts, "Local player: " .. LocalPlayer.Name)
+							if LocalPlayer.Team then table.insert(parts, "Team: " .. tostring(LocalPlayer.Team.Name)) end
+						end
+						local names = {}
+						for _, p in ipairs(Players:GetPlayers()) do table.insert(names, p.Name) end
+						table.insert(parts, "Players in server (" .. #names .. "): " .. table.concat(names, ", "))
+						local ch = LocalPlayer and LocalPlayer.Character
+						local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+						if hum then
+							table.insert(parts, string.format("Health %d/%d, WalkSpeed %d, JumpPower %d",
+								math.floor(hum.Health), math.floor(hum.MaxHealth), math.floor(hum.WalkSpeed), math.floor(hum.JumpPower or 0)))
+						end
+						local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+						if hrp then
+							local pos = hrp.Position
+							table.insert(parts, string.format("Position (%.0f, %.0f, %.0f)", pos.X, pos.Y, pos.Z))
+						end
+					end)
+				end
+				if type(extraContext) == "function" then
+					local ok, extra = pcall(extraContext)
+					if ok and type(extra) == "string" and #extra > 0 then table.insert(parts, extra) end
+				elseif type(extraContext) == "string" and #extraContext > 0 then
+					table.insert(parts, extraContext)
+				end
+				if #parts == 0 then return nil end
+				return "Live game state right now (use it to answer):\n" .. table.concat(parts, "\n")
+			end
+
+			local function actionPrompt()
+				if #actions == 0 then return nil end
+				local lines = { "You can run in-game actions when the user asks you to do something. Available actions:" }
+				for _, a in ipairs(actions) do
+					table.insert(lines, "- " .. a.Name .. (a.Description ~= "" and (": " .. a.Description) or ""))
+				end
+				table.insert(lines, 'To run one, put [ACTION:name arguments] on its own in your reply plus one short confirmation sentence. Only use listed actions, never invent one.')
+				return table.concat(lines, "\n")
+			end
 
 			local card = create("Frame", {
 				Size = UDim2.new(1, 0, 0, HEIGHT),
@@ -7337,6 +7409,16 @@ local function _constructWindow(Settings)
 			end
 
 			-- one chat bubble; user bubbles sit right in accent, AI bubbles left
+			-- minimal markdown -> RichText so model replies render nicely
+			local function mdToRich(t)
+				t = tostring(t)
+				t = t:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+				t = t:gsub("%*%*([^\n*]+)%*%*", "<b>%1</b>")
+				t = t:gsub("([^%*])%*([^\n*]+)%*([^%*])", "%1<i>%2</i>%3")
+				t = t:gsub("`([^\n`]+)`", "<b>%1</b>")
+				return t
+			end
+
 			local function addBubble(text, isUser, muted)
 				msgOrder += 1
 				local row = create("Frame", {
@@ -7363,10 +7445,11 @@ local function _constructWindow(Settings)
 					Font = FONT_MEDIUM,
 					TextSize = 14,
 					LineHeight = 1.15,
+					RichText = true,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					TextWrapped = true,
 					TextTransparency = 1,
-					Text = text,
+					Text = mdToRich(text),
 					TextColor3 = isUser and textOnAccent() or (muted and Theme.TextMuted or Theme.TextBody),
 					Parent = bubble,
 				})
@@ -7376,7 +7459,7 @@ local function _constructWindow(Settings)
 				scrollBottom()
 				local B = {}
 				function B.setText(t, asMuted)
-					label.Text = t
+					label.Text = mdToRich(t)
 					label.TextColor3 = isUser and textOnAccent() or (asMuted and Theme.TextMuted or Theme.TextBody)
 					scrollBottom()
 				end
@@ -7426,8 +7509,35 @@ local function _constructWindow(Settings)
 			-- context the model sees
 			local function buildMessages()
 				local out = { { role = "system", content = sysPrompt } }
+				local gc = buildGameContext()
+				if gc then table.insert(out, { role = "system", content = gc }) end
+				local ap = actionPrompt()
+				if ap then table.insert(out, { role = "system", content = ap }) end
 				for _, m in ipairs(history) do table.insert(out, m) end
 				return out
+			end
+
+			-- pull the reply out of a response body, and never mistake a provider
+			-- error payload ({"error":...}, "Queue full", ...) for an answer
+			local function parseChatBody(body)
+				if type(body) ~= "string" or #body == 0 then return nil, "empty response" end
+				local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+				if ok and type(data) == "table" then
+					if data.error ~= nil then
+						local msg = type(data.error) == "table" and (data.error.message or "provider error") or tostring(data.error)
+						if string.find(string.lower(msg), "queue full") then msg = "the free AI is busy" end
+						return nil, msg
+					end
+					local content = data.choices and data.choices[1] and data.choices[1].message and data.choices[1].message.content
+					if type(content) == "string" and #content > 0 then return content end
+					return nil, "empty response"
+				end
+				-- plain-text reply; reject bodies that are obviously error blobs
+				local low = string.lower(body)
+				if string.find(body, '"error"', 1, true) or string.find(low, "queue full", 1, true) then
+					return nil, "the free AI is busy"
+				end
+				return body
 			end
 
 			local function keyedRequest(key)
@@ -7441,39 +7551,52 @@ local function _constructWindow(Settings)
 					return nil, "HTTP " .. code, true -- key problem: exhausted/invalid/rate limited
 				end
 				if code < 200 or code >= 300 then return nil, "HTTP " .. code, false end
-				local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
-				local content = ok and type(data) == "table" and data.choices and data.choices[1]
-					and data.choices[1].message and data.choices[1].message.content
-				if type(content) == "string" and #content > 0 then return content end
-				return nil, "empty response", false
+				return parseChatBody(res.Body)
+			end
+
+			local function freePost(withModel)
+				local res, rerr = httpPost("https://text.pollinations.ai/openai", {
+					["Content-Type"] = "application/json",
+				}, { model = withModel, messages = buildMessages(), private = true })
+				if not res then return nil, rerr or "request failed" end
+				local code = tonumber(res.StatusCode or res.status_code) or 0
+				if code < 200 or code >= 300 then
+					local _, perr = parseChatBody(res.Body or "")
+					return nil, perr or ("HTTP " .. code)
+				end
+				return parseChatBody(res.Body)
 			end
 
 			local function freeRequest()
-				-- OpenAI-shaped free endpoint first (keeps conversation context)
-				local res = httpPost("https://text.pollinations.ai/openai", {
-					["Content-Type"] = "application/json",
-				}, { model = "openai", messages = buildMessages() })
-				if res then
-					local code = tonumber(res.StatusCode or res.status_code) or 0
-					if code >= 200 and code < 300 then
-						local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
-						local content = ok and type(data) == "table" and data.choices and data.choices[1]
-							and data.choices[1].message and data.choices[1].message.content
-						if type(content) == "string" and #content > 0 then return content end
-						if ok and type(data) ~= "table" and type(res.Body) == "string" and #res.Body > 0 then
-							return res.Body
-						end
-					end
+				local altModel = freeModel ~= "openai" and "openai" or "mistral"
+				-- primary model, one backoff retry (queue-full clears quickly), then the alternate
+				local plan = {
+					{ model = freeModel },
+					{ model = freeModel, wait = 2.5 },
+					{ model = altModel },
+				}
+				local lastErr = "the free AI service is unreachable"
+				for _, step in ipairs(plan) do
+					if step.wait then task.wait(step.wait) end
+					local reply, err = freePost(step.model)
+					if reply then return reply end
+					if err then lastErr = err end
 				end
-				-- plain GET fallback: compact transcript in the prompt
+				-- plain GET last resort: compact transcript in the prompt
 				local lines = { sysPrompt }
+				local gc = buildGameContext()
+				if gc then table.insert(lines, gc) end
 				for _, m in ipairs(history) do
 					table.insert(lines, (m.role == "user" and "User: " or "Assistant: ") .. m.content)
 				end
 				table.insert(lines, "Assistant:")
 				local raw = fetch("https://text.pollinations.ai/" .. HttpService:UrlEncode(table.concat(lines, "\n")))
-				if type(raw) == "string" and #raw > 0 then return raw end
-				return nil, "the free AI service is unreachable"
+				if raw then
+					local reply, err = parseChatBody(raw)
+					if reply then return reply end
+					if err then lastErr = err end
+				end
+				return nil, lastErr
 			end
 
 			-- blocking yes/no through the dialog. Closing with the X counts as no,
@@ -7579,8 +7702,30 @@ local function _constructWindow(Settings)
 					if not msgs.Parent or chatEpoch ~= myEpoch then return end
 					if reply then
 						reply = tostring(reply):gsub("^%s+", ""):gsub("%s+$", "")
+						-- run any [ACTION:name args] the model emitted, then strip them
+						local ran = {}
+						if #actions > 0 then
+							reply = reply:gsub("%[ACTION:%s*([%w_%-]+)%s*([^%]]*)%]", function(aname, aargs)
+								for _, a in ipairs(actions) do
+									if string.lower(a.Name) == string.lower(aname) then
+										table.insert(ran, a.Name)
+										task.spawn(function()
+											local ok, aerr = pcall(a.Callback, (aargs:gsub("^%s+", "")):gsub("%s+$", ""))
+											if not ok then warn("Rayfield Gen3 | AI action error: " .. tostring(aerr)) end
+										end)
+										break
+									end
+								end
+								return ""
+							end)
+							reply = reply:gsub("%s+$", ""):gsub("^%s+", "")
+						end
+						if reply == "" then reply = "Done." end
 						thinking.setText(reply, false)
 						pushHistory("assistant", reply)
+						if #ran > 0 then
+							addBubble("Ran: " .. table.concat(ran, ", "), false, true)
+						end
 					else
 						thinking.setText("Could not reply: " .. tostring(err or "unknown error"), true)
 					end
@@ -7622,6 +7767,14 @@ local function _constructWindow(Settings)
 			end
 			function AIChat:SetSystemPrompt(p)
 				if type(p) == "string" then sysPrompt = p end
+			end
+			function AIChat:RegisterAction(name, description, callback)
+				if type(name) == "string" and type(callback) == "function" then
+					table.insert(actions, { Name = name, Description = tostring(description or ""), Callback = callback })
+				end
+			end
+			function AIChat:SetContext(ctx)
+				extraContext = ctx
 			end
 			return AIChat
 		end
