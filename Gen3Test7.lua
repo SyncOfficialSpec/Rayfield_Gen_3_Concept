@@ -93,7 +93,7 @@ AITab:CreateAIChat({
 })
 AITab:CreateParagraph({
 	Title = "Try the game awareness",
-	Content = "Ask it: which game am I in? How much health do I have? Who is in the server? Then tell it: make me jump, or set my speed to 50.",
+	Content = "Ask it: which game am I in? How much health do I have? Who is in the server? Then tell it: make me jump, or set my speed to 50. To use your own API keys, open the gear and add them under AI keys.",
 })
 AITab:CreateParagraph({
 	Title = "Session dashboard",

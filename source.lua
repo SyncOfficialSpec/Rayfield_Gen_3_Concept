@@ -208,6 +208,15 @@ local THEME_ORDER = {"Default", "Ocean", "Amber", "Rose", "Emerald", "Amethyst",
 -- constructor's settings menu can call them.
 local GEN = { generation = "Gen3", theme = "Default", transparency = 0, acrylic = false, acrylicPrevT = 0, blueprint = nil, windowCell = nil, windowProxy = nil }
 local suppressCallbacks = false
+
+-- User-added AI API keys, shared by every AI chat and managed from settings.
+-- They stack: chats try them in order and ask before switching when one fails.
+local aiKeys = {}
+local function maskKey(k)
+	k = tostring(k)
+	if #k <= 8 then return string.rep("*", #k) end
+	return string.sub(k, 1, 4) .. string.rep("*", math.min(8, #k - 8)) .. string.sub(k, -4)
+end
 local applyStyle, performRebuild, applyFont, persistChoice
 
 local painted = {}
@@ -7252,13 +7261,23 @@ local function _constructWindow(Settings)
 			local freeModel = ChatSettings.FreeModel or "openai-fast"
 			local gameAware = ChatSettings.GameAware ~= false
 			local extraContext = ChatSettings.Context
-			local keys = {}
+			-- per-chat keys from the constructor; global keys (added in settings)
+			-- are appended at request time so both stack
+			local ownKeys = {}
 			if type(ChatSettings.Keys) == "table" then
 				for _, k in ipairs(ChatSettings.Keys) do
-					if type(k) == "string" and #k > 0 then table.insert(keys, k) end
+					if type(k) == "string" and #k > 0 then table.insert(ownKeys, k) end
 				end
 			end
-			local keyIndex = #keys > 0 and 1 or nil -- nil = free built-in provider
+			local function allKeys()
+				local t = {}
+				for _, k in ipairs(ownKeys) do t[#t + 1] = k end
+				for _, k in ipairs(aiKeys) do t[#t + 1] = k end
+				return t
+			end
+			local keyCursor = 1      -- position in the current key list
+			local forcedFree = false -- true after the user chooses the free provider
+			local lastKeyCount = -1  -- adding/removing keys re-enables keyed mode
 			local history = {}
 			local busy = false
 			local sendTimes = {}
@@ -7366,7 +7385,7 @@ local function _constructWindow(Settings)
 				Font = FONT_MEDIUM,
 				TextSize = 12,
 				TextXAlignment = Enum.TextXAlignment.Right,
-				Text = keyIndex and ("key " .. keyIndex) or "built in",
+				Text = (#allKeys() > 0) and "key 1" or "built in",
 				Parent = card,
 			})
 			paint(providerLabel, "TextColor3", "TextMuted")
@@ -7380,8 +7399,7 @@ local function _constructWindow(Settings)
 				CanvasSize = UDim2.new(0, 0, 0, 0),
 				AutomaticCanvasSize = Enum.AutomaticSize.Y,
 				ScrollingDirection = Enum.ScrollingDirection.Y,
-				ScrollBarThickness = 2,
-				ScrollBarImageColor3 = Color3.fromRGB(90, 90, 90),
+				ScrollBarThickness = 0,
 				BorderSizePixel = 0,
 				Parent = card,
 			})
@@ -7636,10 +7654,20 @@ local function _constructWindow(Settings)
 					addBubble("One message at a time, please.", false, true)
 					return
 				end
+				-- adding/removing keys re-enables keyed mode from the top
+				local kcount = #allKeys()
+				if kcount ~= lastKeyCount then
+					lastKeyCount = kcount
+					forcedFree = false
+					keyCursor = 1
+				end
+				local usingKeys = (not forcedFree) and kcount > 0
+				providerLabel.Text = usingKeys and ("key " .. keyCursor) or "built in"
+
 				-- rate limit (tighter on the free provider)
 				local now = os.clock()
-				local minGap = keyIndex and 1.5 or 4
-				local perMin = keyIndex and 20 or 8
+				local minGap = usingKeys and 1.5 or 4
+				local perMin = usingKeys and 20 or 8
 				for i = #sendTimes, 1, -1 do
 					if now - sendTimes[i] > 60 then table.remove(sendTimes, i) end
 				end
@@ -7671,23 +7699,25 @@ local function _constructWindow(Settings)
 					local reply, err
 					while true do
 						if not msgs.Parent or chatEpoch ~= myEpoch then break end -- UI gone or cleared
-						if keyIndex then
+						local kl = allKeys()
+						if usingKeys and kl[keyCursor] then
 							local keyFail
-							reply, err, keyFail = keyedRequest(keys[keyIndex])
+							reply, err, keyFail = keyedRequest(kl[keyCursor])
 							if reply or not keyFail then break end
 							if not msgs.Parent or chatEpoch ~= myEpoch then break end -- cleared/destroyed while requesting
-							if keyIndex < #keys then
-								if askSwitch("API key " .. keyIndex .. " failed",
-									"That key returned " .. tostring(err) .. ". Switch to key " .. (keyIndex + 1) .. " and retry?",
+							if keyCursor < #kl then
+								if askSwitch("API key " .. keyCursor .. " failed",
+									"That key returned " .. tostring(err) .. ". Switch to key " .. (keyCursor + 1) .. " and retry?",
 									"Switch") then
-									keyIndex += 1
-									providerLabel.Text = "key " .. keyIndex
+									keyCursor += 1
+									providerLabel.Text = "key " .. keyCursor
 								else break end
 							else
 								if askSwitch("All API keys failed",
 									"The last key returned " .. tostring(err) .. ". Use the free built-in AI instead?",
 									"Use free") then
-									keyIndex = nil
+									usingKeys = false
+									forcedFree = true
 									providerLabel.Text = "built in"
 								else break end
 							end
@@ -7749,11 +7779,9 @@ local function _constructWindow(Settings)
 			function AIChat:Ask(text) send(text) end
 			function AIChat:AddKey(key)
 				if type(key) == "string" and #key > 0 then
-					table.insert(keys, key)
-					if not keyIndex then
-						keyIndex = #keys
-						providerLabel.Text = "key " .. keyIndex
-					end
+					table.insert(ownKeys, key)
+					forcedFree = false -- prefer keys again
+					providerLabel.Text = "key 1"
 				end
 			end
 			function AIChat:Clear()
@@ -8005,6 +8033,71 @@ local function _constructWindow(Settings)
 				Window:SetAcrylic(state)
 			end,
 		})
+
+		-- Bring-your-own AI keys, shared by every AI chat. They stack; the chat
+		-- asks before switching when one runs out. Empty = free built-in AI.
+		SettingsTab:CreateSection("AI keys")
+		local keysLabel
+		local function refreshKeysLabel()
+			local n = #aiKeys
+			local suffix = ""
+			if n > 0 then suffix = "  (" .. maskKey(aiKeys[n]) .. (n > 1 and (" +" .. (n - 1) .. " more") or "") .. ")" end
+			keysLabel:Set((n == 0 and "No keys  \u{00B7}  using free built-in AI" or (n .. (n == 1 and " key saved" or " keys saved") .. suffix)), "key-round")
+		end
+		keysLabel = SettingsTab:CreateLabel("...", "key-round")
+		local keyInput = SettingsTab:CreateInput({
+			Name = "Add API key",
+			Icon = "plus",
+			PlaceholderText = "sk-... then press Add",
+			CurrentValue = "",
+		})
+		SettingsTab:CreateButton({
+			Name = "Add key",
+			Icon = "key-round",
+			Callback = function()
+				local k = tostring(keyInput.CurrentValue or ""):gsub("^%s+", ""):gsub("%s+$", "")
+				if #k < 8 then
+					RayfieldLibrary:Notify({ Title = "AI keys", Content = "That does not look like a valid key.", Duration = 3, Image = "triangle-alert" })
+					return
+				end
+				table.insert(aiKeys, k)
+				persistChoice()
+				keyInput:Set("")
+				refreshKeysLabel()
+				RayfieldLibrary:Notify({ Title = "AI keys", Content = "Key added. The AI chat will use it.", Duration = 3, Image = "check" })
+			end,
+		})
+		SettingsTab:CreateButton({
+			Name = "Remove last key",
+			Icon = "minus",
+			Callback = function()
+				if #aiKeys > 0 then
+					table.remove(aiKeys)
+					persistChoice()
+					refreshKeysLabel()
+				end
+			end,
+		})
+		SettingsTab:CreateButton({
+			Name = "Clear all keys",
+			Icon = "trash-2",
+			Callback = function()
+				if #aiKeys == 0 then return end
+				RayfieldLibrary:Dialog({
+					Title = "Clear all AI keys?",
+					Content = "This removes the " .. #aiKeys .. " saved key(s). The AI chat falls back to the free built-in provider.",
+					Options = {
+						{ Text = "Cancel" },
+						{ Text = "Clear", Color = Color3.fromRGB(200, 70, 70), Callback = function()
+							for i = #aiKeys, 1, -1 do aiKeys[i] = nil end
+							persistChoice()
+							refreshKeysLabel()
+						end },
+					},
+				})
+			end,
+		})
+		refreshKeysLabel()
 
 		SettingsTab:CreateSection("Interface")
 		SettingsTab:CreateKeybind({
@@ -8466,7 +8559,7 @@ function persistChoice()
 		mkfolder(BASE_FOLDER)
 		writef(GEN_FILE, HttpService:JSONEncode({
 			generation = GEN.generation, theme = GEN.theme, font = GEN.fontOverride,
-			transparency = GEN.transparency, acrylic = GEN.acrylic,
+			transparency = GEN.transparency, acrylic = GEN.acrylic, aiKeys = aiKeys,
 		}))
 	end)
 end
@@ -8482,6 +8575,12 @@ local function loadPersistedChoice()
 		if data.font ~= nil then GEN.fontOverride = data.font end
 		if type(data.transparency) == "number" then GEN.transparency = math.clamp(data.transparency, 0, 0.92) end
 		if type(data.acrylic) == "boolean" then GEN.acrylic = data.acrylic end
+		if type(data.aiKeys) == "table" then
+			for i = #aiKeys, 1, -1 do aiKeys[i] = nil end
+			for _, k in ipairs(data.aiKeys) do
+				if type(k) == "string" and #k > 0 then table.insert(aiKeys, k) end
+			end
+		end
 	end
 end
 
