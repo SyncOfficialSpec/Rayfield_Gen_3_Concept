@@ -7,8 +7,8 @@ local Window = Rayfield:CreateWindow({
 	Badge = { Text = "phase 8", Icon = "flask-conical" },
 	TabStyle = "Accent",
 	ConfigurationSaving = { Enabled = true, FolderName = "Gen3Test8", FileName = "cfg" },
-	-- The assistant lives in the top bar by default (the sparkles icon). It
-	-- permanently knows it was made by Diablo and that this is Gen3, no matter
+	-- The assistant lives in the top bar (the sparkles icon) and opens a floating
+	-- popup. It permanently knows Diablo made it and that this is Gen3, no matter
 	-- what prompt or API keys are set. Pass AI = false to remove it.
 	AI = {
 		SystemPrompt = "You are the friendly Gen3 assistant. Keep answers short.",
@@ -24,14 +24,12 @@ local Window = Rayfield:CreateWindow({
 
 local Home = Window:CreateTab("Home", "house")
 
--- Slider: exactly the Fanmade Gen2 look (chunky track, accent-gradient fill, white pill)
 Home:CreateSection("Slider (Gen2 look)")
 local FovSlider = Home:CreateSlider({ Name = "Field of View", Icon = "eye", Range = { 70, 120 }, Increment = 1,
 	CurrentValue = 95, Suffix = "deg", Flag = "fov", Callback = function() end })
 Home:CreateSlider({ Name = "Volume", Icon = "volume-2", Range = { 0, 100 }, Increment = 1,
 	CurrentValue = 40, Suffix = "%", Flag = "vol", Callback = function() end })
 
--- Spoilers: click the cover to reveal, click the eye to hide again
 Home:CreateSection("Spoilers")
 Home:CreateSpoiler({
 	Name = "Boss location",
@@ -41,7 +39,6 @@ local ElemSpoiler = Home:CreateSpoiler({ Name = "Hidden controls" })
 ElemSpoiler:CreateToggle({ Name = "God mode", CurrentValue = false, Flag = "god", Callback = function() end })
 ElemSpoiler:CreateSlider({ Name = "Fly speed", Range = { 0, 200 }, Increment = 1, CurrentValue = 50, Flag = "fly", Callback = function() end })
 
--- Dropdown: no scrollbar, and the search sits behind an icon you click to open
 Home:CreateSection("Dropdown")
 local Weapon = Home:CreateDropdown({
 	Name = "Weapon",
@@ -58,8 +55,6 @@ local Weapon = Home:CreateDropdown({
 
 local More = Window:CreateTab("More", "sliders-horizontal")
 
--- Hold button: proper completion effect (flash + checkmark) and a notification;
--- the effect plays once and resets, never replays unless you hold again
 More:CreateSection("Hold to confirm")
 More:CreateHoldButton({
 	Name = "Hold to wipe save",
@@ -69,19 +64,23 @@ More:CreateHoldButton({
 	Callback = function() end,
 })
 
+-- A second dropdown, on a different tab, that the tutorial will jump to and open
+More:CreateSection("Aiming")
+local AimPart = More:CreateDropdown({
+	Name = "Aim part",
+	Icon = "crosshair",
+	Options = { "Head", "Torso", "Arms", "Legs", "Root" },
+	CurrentOption = "Head",
+	Flag = "aimpart",
+	Callback = function() end,
+})
+
 More:CreateSection("Assistant")
 More:CreateParagraph({
 	Title = "Ask the assistant",
-	Content = "Click the sparkles icon in the top bar. Ask it: who made you? what is this? Then say: make me jump. It always knows Diablo made it and this is Gen3, even if you change API keys.",
+	Content = "Tap the sparkles icon in the top bar to open the assistant popup. Ask: who made you? what is this? Then say: make me jump.",
 })
 
-More:CreateSection("Tutorial")
-More:CreateParagraph({
-	Title = "Get Started tour",
-	Content = "Press the button below to replay the walkthrough. Menu creators add it with Window:CreateTutorial and a list of steps.",
-})
-
--- Build the tutorial first so the buttons/elements it points at already exist
 local Tour
 More:CreateButton({
 	Name = "Replay Get Started",
@@ -89,21 +88,25 @@ More:CreateButton({
 	Callback = function() if Tour then Tour:Start() end end,
 })
 
+-- Built last so every element it points at already exists. The tutorial drives
+-- the menu itself: it switches tabs, scrolls, and opens dropdowns for you.
 Tour = Window:CreateTutorial({
 	AutoStart = true,
-	Delay = 0.8,
+	Delay = 0.9,
 	OnFinish = function() Rayfield:Notify({ Title = "All set", Content = "You finished the tour.", Duration = 4, Icon = "check" }) end,
 	Steps = {
 		{ Title = "Welcome to Gen3 Test8", Icon = "sparkles",
-			Content = "This quick tour shows the new phase 8 bits. Tap Next to walk through them, or Skip anytime." },
-		{ Title = "The Gen2 slider is back", Icon = "eye", Target = FovSlider and FovSlider.Card,
-			Content = "Sliders now use the chunky Fanmade Gen2 track and white pill you liked." },
-		{ Title = "Spoilers", Icon = "eye-off", Target = ElemSpoiler and ElemSpoiler.Card,
-			Content = "Hide text or whole elements behind a cover. Tap the cover to reveal, tap the eye to hide." },
-		{ Title = "Cleaner dropdowns", Icon = "search", Target = Weapon and Weapon.Card,
-			Content = "No more scrollbar, and the search hides behind the little icon until you want it." },
+			Content = "A quick tour of the phase 8 bits. Sit back, the tour drives the menu itself. Tap Next, or Skip anytime." },
+		{ Title = "The Gen2 slider", Icon = "eye", Target = FovSlider,
+			Content = "Sliders use the chunky Fanmade Gen2 track and white pill you liked." },
+		{ Title = "Spoilers", Icon = "eye-off", Target = ElemSpoiler,
+			Content = "Hide text or whole elements behind a cover. Tap the cover to reveal, the eye to hide." },
+		{ Title = "The dropdown opens for you", Icon = "list", Target = Weapon, Open = true,
+			Content = "Watch: the tour opens the Weapon dropdown so you can see exactly where the options live." },
+		{ Title = "Even across tabs", Icon = "crosshair", Target = AimPart, Open = true,
+			Content = "This one lives on the More tab. The tour switches tabs, scrolls to it, and opens it. That's the whole point." },
 		{ Title = "Meet the assistant", Icon = "sparkles",
-			Content = "The sparkles icon in the top bar opens the built-in assistant. It knows it was made by Diablo and can answer or run actions." },
+			Content = "The sparkles icon in the top bar opens the assistant popup. It knows it was made by Diablo and can run actions." },
 		{ Title = "You're ready", Icon = "check",
 			Content = "That's everything new. Press Finish and start building." },
 	},
@@ -112,7 +115,7 @@ Tour = Window:CreateTutorial({
 Rayfield:LoadConfiguration()
 Rayfield:Notify({
 	Title = "Gen3 Test8 loaded",
-	Content = "The Get Started tour opens in a moment. Try the spoilers and the dropdown search icon.",
+	Content = "The Get Started tour opens in a moment and drives the menu itself.",
 	Duration = 6,
 	Icon = "check",
 })

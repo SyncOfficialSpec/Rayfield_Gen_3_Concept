@@ -231,6 +231,16 @@ local function maskKey(k)
 	if #k <= 8 then return string.rep("*", #k) end
 	return string.sub(k, 1, 4) .. string.rep("*", math.min(8, #k - 8)) .. string.sub(k, -4)
 end
+-- Which provider a pasted key belongs to, by prefix. OpenRouter/Groq/Google have
+-- real free tiers; plain OpenAI keys 429 without billing.
+local function aiProviderName(k)
+	k = tostring(k or "")
+	if k:sub(1, 6) == "sk-or-" then return "OpenRouter"
+	elseif k:sub(1, 4) == "gsk_" then return "Groq"
+	elseif k:sub(1, 4) == "AIza" then return "Google Gemini"
+	elseif k:sub(1, 3) == "sk-" then return "OpenAI" end
+	return nil
+end
 local applyStyle, performRebuild, applyFont, persistChoice
 
 local painted = {}
@@ -2574,6 +2584,24 @@ local function _constructWindow(Settings)
 		local model = ChatSettings.Model or "gpt-4o-mini"
 		local endpoint = ChatSettings.Endpoint or "https://api.openai.com/v1/chat/completions"
 		local freeModel = ChatSettings.FreeModel or "openai-fast"
+
+		-- Route each key to the right provider by its prefix, so people can paste
+		-- a key from a service that actually has a free tier (OpenRouter, Groq,
+		-- Google) instead of only OpenAI, which 429s any key without billing. The
+		-- author can still pin a provider with ChatSettings.Endpoint/Model.
+		local function providerFor(key)
+			if ChatSettings.Endpoint then return endpoint, model, "custom" end
+			local k = tostring(key or "")
+			local m = ChatSettings.Model -- author override, nil if unset
+			if k:sub(1, 6) == "sk-or-" then
+				return "https://openrouter.ai/api/v1/chat/completions", m or "openrouter/free", "OpenRouter"
+			elseif k:sub(1, 4) == "gsk_" then
+				return "https://api.groq.com/openai/v1/chat/completions", m or "llama-3.3-70b-versatile", "Groq"
+			elseif k:sub(1, 4) == "AIza" then
+				return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", m or "gemini-2.5-flash-lite", "Google"
+			end
+			return endpoint, model, "OpenAI"
+		end
 		local gameAware = ChatSettings.GameAware ~= false
 		local extraContext = ChatSettings.Context
 		-- per-chat keys from the constructor; global keys (added in settings)
@@ -2901,17 +2929,41 @@ local function _constructWindow(Settings)
 		end
 
 		local function keyedRequest(key)
-			local res, rerr = httpPost(endpoint, {
-				["Content-Type"] = "application/json",
-				["Authorization"] = "Bearer " .. key,
-			}, { model = model, messages = buildMessages(), max_tokens = 350, temperature = 0.7 })
-			if not res then return nil, rerr or "request failed", false end
-			local code = tonumber(res.StatusCode or res.status_code) or 0
-			if code == 401 or code == 402 or code == 403 or code == 429 then
-				return nil, "HTTP " .. code, true -- key problem: exhausted/invalid/rate limited
+			local ep, mdl, provider = providerFor(key)
+			for attempt = 1, 3 do
+				local res, rerr = httpPost(ep, {
+					["Content-Type"] = "application/json",
+					["Authorization"] = "Bearer " .. key,
+					-- OpenRouter asks for these; harmless everywhere else
+					["HTTP-Referer"] = "https://github.com/SyncOfficialSpec/Rayfield_Gen_3_Concept",
+					["X-Title"] = "Rayfield Gen3",
+				}, { model = mdl, messages = buildMessages(), max_tokens = 350, temperature = 0.7 })
+				if not res then return nil, rerr or "request failed", false end
+				local code = tonumber(res.StatusCode or res.status_code) or 0
+				if code >= 200 and code < 300 then return parseChatBody(res.Body) end
+				local low = string.lower(tostring(res.Body or ""))
+				if code == 429 then
+					-- a dead/keyless-quota key never recovers, so switch straight away;
+					-- a plain rate limit clears, so back off and retry a couple of times
+					if low:find("insufficient_quota") or low:find("exceeded your current quota") or low:find("billing") then
+						return nil, provider .. " key has no credit or quota left", true
+					end
+					if attempt < 3 then task.wait(2.5) else return nil, provider .. " is rate limited, try again soon", true end
+				elseif code == 401 or code == 403 then
+					return nil, provider .. " rejected this key (HTTP " .. code .. ")", true
+				elseif code == 400 then
+					-- 400 is usually a bad/blank key (Google), sometimes a bad model
+					if low:find("model") and not (low:find("api key") or low:find("api_key")) then
+						return nil, provider .. " could not use model \"" .. tostring(mdl) .. "\"", true
+					end
+					return nil, provider .. " rejected this key (HTTP 400)", true
+				elseif code == 404 then
+					return nil, provider .. " could not use model \"" .. tostring(mdl) .. "\" (HTTP 404)", true
+				else
+					return nil, "HTTP " .. code, false
+				end
 			end
-			if code < 200 or code >= 300 then return nil, "HTTP " .. code, false end
-			return parseChatBody(res.Body)
+			return nil, provider .. " is rate limited, try again soon", true
 		end
 
 		local function freePost(withModel)
@@ -3176,7 +3228,6 @@ local function _constructWindow(Settings)
 			local built, overlay, scrim, panel, panelScale, isOpen = false, nil, nil, nil, nil, false
 			local setOpen
 
-			local OPEN_Y = HEADER_H - 8
 			local function build()
 				-- a plain container (not a CanvasGroup) so we never nest CanvasGroups
 				-- around the chat's inner scroll-fade group, which triggers the
@@ -3195,15 +3246,17 @@ local function _constructWindow(Settings)
 					Size = UDim2.fromScale(1, 1), ZIndex = 1, Parent = overlay,
 				})
 				round(scrim, GenStyle.windowCorner) -- match the window's rounded corners
+				-- a clearly floating popup: centred, with dim margins all around
 				panel = create("Frame", {
-					AnchorPoint = Vector2.new(0.5, 0),
-					Position = UDim2.new(0.5, 0, 0, OPEN_Y),
-					Size = UDim2.new(1, -24, 1, -HEADER_H - 18),
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.new(0.5, 0, 0.52, 0),
+					Size = UDim2.new(0.9, 0, 0.74, 0),
 					BackgroundColor3 = Theme.Card, ZIndex = 3, Parent = overlay,
 				})
 				paint(panel, "BackgroundColor3", "Card")
 				cardBase(panel)
-				panelScale = create("UIScale", { Scale = 0.92, Parent = panel })
+				create("UISizeConstraint", { MaxSize = Vector2.new(420, 620), MinSize = Vector2.new(240, 300), Parent = panel })
+				panelScale = create("UIScale", { Scale = 0.9, Parent = panel })
 				-- close X, sitting in the header space we reserved on the right
 				local closeBtn = create("TextButton", {
 					BackgroundTransparency = 1, Text = "",
@@ -3230,15 +3283,16 @@ local function _constructWindow(Settings)
 				if not overlay then return end
 				if isOpen then
 					overlay.Visible = true
-					panel.Position = UDim2.new(0.5, 0, 0, OPEN_Y + 12) -- slide-down start
-					tween(scrim, TI_MED, { BackgroundTransparency = 0.4 })
+					panel.Position = UDim2.new(0.5, 0, 0.55, 0) -- pop up from slightly lower
+					panelScale.Scale = 0.9
+					tween(scrim, TI_MED, { BackgroundTransparency = 0.5 })
 					tween(panelScale, TI_SMOOTH, { Scale = 1 })
-					tween(panel, TI_SMOOTH, { Position = UDim2.new(0.5, 0, 0, OPEN_Y) })
+					tween(panel, TI_SMOOTH, { Position = UDim2.new(0.5, 0, 0.52, 0) })
 					tween(aiIcon, TI_FAST, { ImageColor3 = Theme.AccentSoft or Theme.Accent })
 				else
 					tween(scrim, TI_MED, { BackgroundTransparency = 1 })
-					tween(panelScale, TI_MED, { Scale = 0.92 })
-					tween(panel, TI_MED, { Position = UDim2.new(0.5, 0, 0, OPEN_Y + 12) })
+					tween(panelScale, TI_MED, { Scale = 0.9 })
+					tween(panel, TI_MED, { Position = UDim2.new(0.5, 0, 0.55, 0) })
 					tween(aiIcon, TI_FAST, { ImageColor3 = Theme.Accent })
 					local o = overlay
 					task.delay(0.28, function() if not isOpen and o then o.Visible = false end end)
@@ -6590,6 +6644,12 @@ local function _constructWindow(Settings)
 				saveConfiguration()
 			end
 
+			-- open/close hooks so a tutorial (or script) can drive the dropdown
+			function Dropdown:Open() if not open then setOpen(true) end end
+			function Dropdown:Close() if open then setOpen(false) end end
+			function Dropdown:IsOpen() return open end
+			Dropdown.Wrapper = wrapper
+
 			local setLocked = lockOverlay(card, DropdownSettings.Locked)
 			function Dropdown:SetLocked(state) setLocked(state and true or false) end
 
@@ -8013,7 +8073,7 @@ local function _constructWindow(Settings)
 			create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
 				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 9),
+				Padding = UDim.new(0, 10),
 				Parent = card,
 			})
 
@@ -8050,22 +8110,95 @@ local function _constructWindow(Settings)
 				eyeIcon.AnchorPoint = Vector2.new(0.5, 0.5)
 				eyeIcon.Position = UDim2.fromScale(0.5, 0.5)
 			end
+			eyeBtn.MouseEnter:Connect(function() if eyeIcon then tween(eyeIcon, TI_FAST, { ImageColor3 = Theme.TextTitle }) end end)
+			eyeBtn.MouseLeave:Connect(function() if eyeIcon then tween(eyeIcon, TI_FAST, { ImageColor3 = revealed and Theme.Accent or Theme.TextSub }) end end)
 
-			-- content lives in a wrapper the cover can overlay exactly
-			local wrap = create("Frame", {
-				BackgroundTransparency = 1,
-				AutomaticSize = Enum.AutomaticSize.Y,
-				Size = UDim2.new(1, 0, 0, 0),
+			-- the redacted cover bar (shown while hidden). A plain Frame with a
+			-- fixed height, so there is no automatic-size feedback and no nested
+			-- CanvasGroup for the engine to choke on.
+			local coverBar = create("Frame", {
+				Size = UDim2.new(1, 0, 0, 44),
+				BackgroundColor3 = Theme.CardInset,
 				LayoutOrder = 2,
 				Parent = card,
 			})
+			paint(coverBar, "BackgroundColor3", "CardInset")
+			round(coverBar, math.max(6, GenStyle.cardRadius - 2))
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(202, 202, 202)),
+				Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 0.9),
+					NumberSequenceKeypoint.new(1, 0.97),
+				}),
+				Parent = coverBar,
+			})
+			local coverStroke = create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = coverBar })
+			paint(coverStroke, "Color", "Stroke")
+			-- centered pill affordance
+			local pill = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 0, 28),
+				BackgroundColor3 = Theme.CardHover,
+				ZIndex = 2,
+				Parent = coverBar,
+			})
+			paint(pill, "BackgroundColor3", "CardHover")
+			roundFull(pill)
+			create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.86, Thickness = 1, Parent = pill })
+			local pillScale = create("UIScale", { Scale = 1, Parent = pill })
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 7),
+				Parent = pill,
+			})
+			create("UIPadding", { PaddingLeft = UDim.new(0, 13), PaddingRight = UDim.new(0, 15), Parent = pill })
+			local pillIcon = makeIcon(pill, "eye-off", 15, Theme.Accent)
+			if pillIcon then pillIcon.LayoutOrder = 1; pillIcon.ZIndex = 2 end
+			paint(pillIcon, "ImageColor3", "Accent")
+			local pillLabel = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 0, 18),
+				Font = FONT_MEDIUM,
+				TextSize = 13,
+				Text = SpoilerSettings.RevealText or "Spoiler, tap to reveal",
+				LayoutOrder = 2,
+				ZIndex = 2,
+				Parent = pill,
+			})
+			paint(pillLabel, "TextColor3", "TextBody")
+			local coverBtn = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 3,
+				Parent = coverBar,
+			})
+			coverBtn.MouseEnter:Connect(function()
+				tween(coverBar, TI_FAST, { BackgroundColor3 = Theme.CardHover })
+				tween(pillScale, TI_FAST, { Scale = 1.04 })
+			end)
+			coverBtn.MouseLeave:Connect(function()
+				tween(coverBar, TI_FAST, { BackgroundColor3 = Theme.CardInset })
+				tween(pillScale, TI_FAST, { Scale = 1 })
+			end)
+
+			-- the real content (text and/or nested elements), shown when revealed
 			local content = create("Frame", {
 				BackgroundTransparency = 1,
 				AutomaticSize = Enum.AutomaticSize.Y,
 				Size = UDim2.new(1, 0, 0, 0),
-				ZIndex = 1,
-				Parent = wrap,
+				Visible = false,
+				LayoutOrder = 3,
+				Parent = card,
 			})
+			local contentScale = create("UIScale", { Scale = 1, Parent = content })
 			create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
 				SortOrder = Enum.SortOrder.LayoutOrder,
@@ -8073,7 +8206,6 @@ local function _constructWindow(Settings)
 				Parent = content,
 			})
 
-			-- optional inline spoiler text
 			if SpoilerSettings.Text and SpoilerSettings.Text ~= "" then
 				local txt = create("TextLabel", {
 					BackgroundTransparency = 1,
@@ -8081,23 +8213,21 @@ local function _constructWindow(Settings)
 					Size = UDim2.new(1, 0, 0, 0),
 					Font = FONT_REGULAR,
 					TextSize = 14,
+					LineHeight = 1.14,
 					TextWrapped = true,
 					TextXAlignment = Enum.TextXAlignment.Left,
 					Text = SpoilerSettings.Text,
 					LayoutOrder = 1,
-					ZIndex = 1,
 					Parent = content,
 				})
 				paint(txt, "TextColor3", "TextBody")
 			end
 
-			-- container for nested elements (elements build into this frame)
 			local inner = create("Frame", {
 				BackgroundTransparency = 1,
 				AutomaticSize = Enum.AutomaticSize.Y,
 				Size = UDim2.new(1, 0, 0, 0),
 				LayoutOrder = 2,
-				ZIndex = 1,
 				Parent = content,
 			})
 			create("UIListLayout", {
@@ -8107,93 +8237,25 @@ local function _constructWindow(Settings)
 				Parent = inner,
 			})
 
-			-- the cover: a CanvasGroup so we can fade the whole thing at once.
-			-- It sits on top of the content and swallows clicks while hidden.
-			local cover = create("CanvasGroup", {
-				Size = UDim2.fromScale(1, 1),
-				BackgroundColor3 = Theme.CardInset,
-				GroupTransparency = 0,
-				ZIndex = 4,
-				Parent = wrap,
-			})
-			paint(cover, "BackgroundColor3", "CardInset")
-			round(cover, GenStyle.cardRadius)
-			local coverStroke = create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = cover })
-			paint(coverStroke, "Color", "Stroke")
-			create("UIGradient", {
-				Rotation = 90,
-				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(216, 216, 216)),
-				Transparency = NumberSequence.new({
-					NumberSequenceKeypoint.new(0, 0.92),
-					NumberSequenceKeypoint.new(1, 0.98),
-				}),
-				Parent = cover,
-			})
-			-- centered "tap to reveal" hint
-			local hint = create("Frame", {
-				BackgroundTransparency = 1,
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(180, 20),
-				ZIndex = 5,
-				Parent = cover,
-			})
-			create("UIListLayout", {
-				FillDirection = Enum.FillDirection.Horizontal,
-				HorizontalAlignment = Enum.HorizontalAlignment.Center,
-				VerticalAlignment = Enum.VerticalAlignment.Center,
-				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 6),
-				Parent = hint,
-			})
-			local hintIcon = makeIcon(hint, "eye", 14, Theme.TextSub)
-			if hintIcon then hintIcon.LayoutOrder = 1; hintIcon.ZIndex = 5 end
-			local hintLabel = create("TextLabel", {
-				BackgroundTransparency = 1,
-				AutomaticSize = Enum.AutomaticSize.X,
-				Size = UDim2.new(0, 0, 0, 20),
-				Font = FONT_MEDIUM,
-				TextSize = 13,
-				Text = SpoilerSettings.RevealText or "Tap to reveal",
-				LayoutOrder = 2,
-				ZIndex = 5,
-				Parent = hint,
-			})
-			paint(hintLabel, "TextColor3", "TextSub")
-			local coverBtn = create("TextButton", {
-				BackgroundTransparency = 1,
-				Text = "",
-				Size = UDim2.fromScale(1, 1),
-				ZIndex = 6,
-				Parent = cover,
-			})
-
-			local revealEpoch = 0
 			local function apply(state, animate)
 				revealed = state and true or false
-				if eyeIcon then applyLucide(eyeIcon, revealed and "eye" or "eye-off") end
+				if eyeIcon then
+					applyLucide(eyeIcon, revealed and "eye" or "eye-off")
+					eyeIcon.ImageColor3 = revealed and Theme.Accent or Theme.TextSub
+				end
 				if revealed then
-					coverBtn.Active = false
+					coverBar.Visible = false
+					content.Visible = true
 					if animate then
-						revealEpoch = revealEpoch + 1
-						local e = revealEpoch
-						tween(cover, TI_MED, { GroupTransparency = 1 })
-						task.delay(0.3, function()
-							if e == revealEpoch and revealed then cover.Visible = false end
-						end)
-					else
-						cover.GroupTransparency = 1
-						cover.Visible = false
+						contentScale.Scale = 0.97
+						tween(contentScale, TI_SMOOTH, { Scale = 1 })
 					end
 				else
-					revealEpoch = revealEpoch + 1
-					coverBtn.Active = true
-					cover.Visible = true
+					content.Visible = false
+					coverBar.Visible = true
 					if animate then
-						cover.GroupTransparency = 1
-						tween(cover, TI_MED, { GroupTransparency = 0 })
-					else
-						cover.GroupTransparency = 0
+						pillScale.Scale = 0.88
+						tween(pillScale, TI_SMOOTH, { Scale = 1 })
 					end
 				end
 			end
@@ -8464,6 +8526,10 @@ local function _constructWindow(Settings)
 		-- Bring-your-own AI keys, shared by every AI chat. They stack; the chat
 		-- asks before switching when one runs out. Empty = free built-in AI.
 		SettingsTab:CreateSection("AI keys")
+		SettingsTab:CreateParagraph({
+			Title = "Which keys work?",
+			Content = "Paste a key and it routes to the right provider automatically. OpenRouter (sk-or-...), Groq (gsk_...) and Google Gemini (AIza...) all have free tiers that work with no billing. A plain OpenAI key (sk-...) needs a paid plan or it returns 429. No key at all = the free built-in AI.",
+		})
 		local keysLabel
 		local function refreshKeysLabel()
 			local n = #aiKeys
@@ -8491,7 +8557,12 @@ local function _constructWindow(Settings)
 				persistChoice()
 				keyInput:Set("")
 				refreshKeysLabel()
-				RayfieldLibrary:Notify({ Title = "AI keys", Content = "Key added. The AI chat will use it.", Duration = 3, Image = "check" })
+				local prov = aiProviderName(k)
+				RayfieldLibrary:Notify({
+					Title = "AI keys",
+					Content = prov and (prov .. " key added. The assistant will use it.") or "Key added. The assistant will use it.",
+					Duration = 3, Image = "check",
+				})
 			end,
 		})
 		SettingsTab:CreateButton({
@@ -8853,6 +8924,11 @@ local function _constructWindow(Settings)
 	-- A "Get Started" tutorial. Script authors pass a list of steps; the user
 	-- gets a stepped overlay they can Skip, walk with Back/Next, and Finish.
 	-- A step may point at an element (Target) to highlight it.
+	-- A "Get Started" tutorial that drives the menu itself. Each step can point
+	-- at any element (pass its handle or its .Card); the tutorial switches to the
+	-- right tab, scrolls the element into view, optionally opens it (dropdowns),
+	-- and frames it with a rounded spotlight that tracks it live. While it runs
+	-- the user cannot scroll or click the menu; the tutorial does everything.
 	function Window:CreateTutorial(TutorialSettings)
 		TutorialSettings = TutorialSettings or {}
 		local rawSteps = TutorialSettings.Steps or TutorialSettings.steps or {}
@@ -8866,47 +8942,88 @@ local function _constructWindow(Settings)
 					Content = s.Content or s.Text or s.Body or s.Description or "",
 					Icon = s.Icon,
 					Target = s.Target,
+					Open = s.Open == true,
 				}
 			end
 		end
 
+		local PAD = 6
+		local CARD_Y = { center = 0.5, top = 0.2, bottom = 0.8 }
 		local handle = {}
-		local active = false
-		local index = 0
-		local epoch = 0
-		local overlay, scrim, spot, cardHolder, cardScale, body, iconImg, titleLbl, contentLbl, dotsRow, backBtn, nextBtn, nextLbl, nextIcon, skipBtn
+		local active, index, epoch = false, 0, 0
+		local overlay, scrim, hlBox, hlGlow, cardHolder, cardScale, iconImg, titleLbl, contentLbl, dotsRow, backBtn, nextBtn, nextLbl, nextIcon, skipBtn
 		local dots = {}
+		local trackConn, trackTarget, openedDropdown
+		local cx, cy, cw, ch, gx, gy, gw, gh, haveGoal = 0, 0, 0, 0, 0, 0, 0, 0, false
 
-		local function finish(skipped)
-			if not active then return end
-			active = false
-			epoch = epoch + 1
-			local o = overlay
-			overlay = nil
-			if o then
-				tween(scrim, TI_MED, { BackgroundTransparency = 1 })
-				tween(o, TI_MED, { GroupTransparency = 1 })
-				if cardScale then tween(cardScale, TI_MED, { Scale = 0.94 }) end
-				task.delay(0.28, function() if o then o:Destroy() end end)
-			end
-			runCallback(skipped and TutorialSettings.OnSkip or TutorialSettings.OnFinish, index + 1)
+		local function rectOf(obj)
+			local wp = window.AbsolutePosition
+			local tp, ts = obj.AbsolutePosition, obj.AbsoluteSize
+			return tp.X - wp.X, tp.Y - wp.Y, ts.X, ts.Y
 		end
 
-		local function positionSpot(target)
-			if not spot then return end
-			local ok = false
-			if typeof(target) == "Instance" and target:IsA("GuiObject") and target.Visible then
-				local wp, ws = window.AbsolutePosition, window.AbsoluteSize
-				local tp, ts = target.AbsolutePosition, target.AbsoluteSize
-				-- only if the target actually sits inside the window
-				if ts.X > 0 and ts.Y > 0 and tp.X + ts.X > wp.X and tp.X < wp.X + ws.X then
-					spot.Position = UDim2.fromOffset(tp.X - wp.X - 5, tp.Y - wp.Y - 5)
-					spot.Size = UDim2.fromOffset(ts.X + 10, ts.Y + 10)
-					ok = true
-				end
+		local function tabOf(obj)
+			for _, e in ipairs(tabs) do
+				if e.Page and obj:IsDescendantOf(e.Page) then return e end
 			end
-			spot.Visible = ok
-			return ok
+			return nil
+		end
+
+		local function resolveTarget(t)
+			if type(t) == "table" then
+				return t.Card or t.Wrapper, t
+			elseif typeof(t) == "Instance" and t:IsA("GuiObject") then
+				return t, nil
+			end
+			return nil, nil
+		end
+
+		local function setScrollLock(locked)
+			for _, e in ipairs(tabs) do
+				if e.Page then e.Page.ScrollingEnabled = not locked end
+			end
+		end
+
+		local function seedGoal(obj)
+			local x, y, w, h = rectOf(obj)
+			gx, gy, gw, gh = x - PAD, y - PAD, w + 2 * PAD, h + 2 * PAD
+			haveGoal = true
+		end
+
+		local function snapToGoal()
+			cx, cy, cw, ch = gx, gy, gw, gh
+		end
+
+		local function startTracking()
+			trackConn = connect(RunService.RenderStepped, function()
+				if not active or not hlBox or not hlBox.Parent then return end
+				if trackTarget and trackTarget.Parent and trackTarget.Visible then
+					seedGoal(trackTarget)
+				end
+				if haveGoal then
+					cx = cx + (gx - cx) * 0.3
+					cy = cy + (gy - cy) * 0.3
+					cw = cw + (gw - cw) * 0.3
+					ch = ch + (gh - ch) * 0.3
+					hlBox.Position = UDim2.fromOffset(math.floor(cx + 0.5), math.floor(cy + 0.5))
+					hlBox.Size = UDim2.fromOffset(math.floor(cw + 0.5), math.floor(ch + 0.5))
+				end
+			end)
+		end
+
+		local function scrollTo(page, obj)
+			if not page then return end
+			local vh = page.AbsoluteWindowSize.Y
+			if vh <= 0 then return end
+			local objCanvasY = (obj.AbsolutePosition.Y - page.AbsolutePosition.Y) + page.CanvasPosition.Y
+			local goal = objCanvasY - (vh - obj.AbsoluteSize.Y) / 2
+			local maxS = math.max(0, page.AbsoluteCanvasSize.Y - vh)
+			goal = math.clamp(goal, 0, maxS)
+			tween(page, TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { CanvasPosition = Vector2.new(0, goal) })
+		end
+
+		local function positionCard(mode)
+			tween(cardHolder, TI_SMOOTH, { Position = UDim2.new(0.5, 0, CARD_Y[mode] or 0.5, 0) })
 		end
 
 		local function renderDots()
@@ -8919,133 +9036,188 @@ local function _constructWindow(Settings)
 			end
 		end
 
-		local function show(i, dir)
-			index = math.clamp(i, 0, #steps - 1)
-			local step = steps[index + 1]
-			if not step then finish(false) return end
-			epoch = epoch + 1
-			local myEpoch = epoch
-
-			-- crossfade the body out, swap text, fade back in with a small slide
-			tween(body, TI_FAST, { GroupTransparency = 1 })
-			local slide = (dir == -1) and 14 or -14
-			tween(body, TI_FAST, { Position = UDim2.new(0, slide, 0, 0) })
-			task.delay(0.15, function()
-				if myEpoch ~= epoch or not active then return end
-				-- icon
-				if iconImg then
-					if step.Icon then
-						iconImg.Visible = true
-						applyLucide(iconImg, step.Icon)
-					else
-						iconImg.Visible = false
-					end
-				end
-				titleLbl.Visible = step.Title ~= nil and step.Title ~= ""
+		local function updateCard(step)
+			local my = epoch
+			tween(titleLbl, TI_FAST, { TextTransparency = 1 })
+			tween(contentLbl, TI_FAST, { TextTransparency = 1 })
+			if iconImg then tween(iconImg, TI_FAST, { ImageTransparency = 1 }) end
+			task.delay(0.13, function()
+				if my ~= epoch then return end
 				titleLbl.Text = step.Title or ""
+				titleLbl.Visible = (step.Title or "") ~= ""
 				contentLbl.Text = step.Content or ""
-				-- highlight the target (if any) and keep the card clear of it
-				local hasSpot = positionSpot(step.Target)
-				if hasSpot then
-					local tp = step.Target.AbsolutePosition.Y - window.AbsolutePosition.Y
-					local topHalf = tp < (window.AbsoluteSize.Y * 0.5)
-					cardHolder.AnchorPoint = Vector2.new(0.5, topHalf and 1 or 0)
-					cardHolder.Position = topHalf and UDim2.new(0.5, 0, 1, -22) or UDim2.new(0.5, 0, 0, 22)
-				else
-					cardHolder.AnchorPoint = Vector2.new(0.5, 0.5)
-					cardHolder.Position = UDim2.fromScale(0.5, 0.5)
+				if iconImg then
+					if step.Icon then iconImg.Visible = true; applyLucide(iconImg, step.Icon)
+					else iconImg.Visible = false end
 				end
-				-- buttons + dots
 				backBtn.Visible = index > 0
 				local last = index == #steps - 1
 				nextLbl.Text = last and "Finish" or "Next"
 				if nextIcon then applyLucide(nextIcon, last and "check" or "arrow-right") end
 				renderDots()
-				-- fade back in
-				body.Position = UDim2.new(0, -slide, 0, 0)
-				tween(body, TI_MED, { GroupTransparency = 0, Position = UDim2.new(0, 0, 0, 0) })
+				tween(titleLbl, TI_MED, { TextTransparency = 0 })
+				tween(contentLbl, TI_MED, { TextTransparency = 0 })
+				if iconImg and step.Icon then tween(iconImg, TI_MED, { ImageTransparency = 0 }) end
 			end)
 		end
 
+		local finish
+
+		local function show(i, dir)
+			if not active then return end -- ignore stray Back/Next during the finish fade-out
+			index = math.clamp(i, 0, #steps - 1)
+			epoch = epoch + 1
+			local my = epoch
+			local step = steps[index + 1]
+			if not step then finish(false) return end
+			updateCard(step)
+
+			task.spawn(function()
+				local obj, hdl = resolveTarget(step.Target)
+				-- close a previously opened dropdown that this step doesn't reuse
+				if openedDropdown and openedDropdown ~= hdl then
+					pcall(function() openedDropdown:Close() end)
+					openedDropdown = nil
+				end
+
+				if not obj then
+					trackTarget = nil
+					haveGoal = false
+					if hlBox then hlBox.Visible = false end
+					positionCard("center")
+					return
+				end
+
+				if my ~= epoch then return end
+
+				local te = tabOf(obj)
+				local switching = te and te ~= currentTab
+				if switching then
+					if hlBox then hlBox.Visible = false end
+					selectTab(te)
+					task.wait(0.34)
+					if my ~= epoch then return end
+				end
+
+				-- open a dropdown so its options show, and frame the whole thing
+				if step.Open and hdl and hdl.Open then
+					openedDropdown = hdl -- set before opening so finish() always closes it
+					hdl:Open()
+					task.wait(0.36)
+					if my ~= epoch then return end
+					obj = hdl.Wrapper or obj
+				end
+
+				trackTarget = obj
+				seedGoal(obj)
+				if not hlBox.Visible or switching then
+					snapToGoal()
+				end
+				hlBox.Visible = true
+
+				-- put the info card in the opposite half so it never covers the target
+				local _, ry, _, rh = rectOf(obj)
+				local centerY = ry + rh / 2
+				positionCard(centerY < window.AbsoluteSize.Y * 0.5 and "bottom" or "top")
+
+				scrollTo(te and te.Page, obj)
+			end)
+		end
+
+		function finish(skipped)
+			if not active then return end
+			active = false
+			epoch = epoch + 1
+			if trackConn then trackConn:Disconnect(); trackConn = nil end
+			trackTarget = nil
+			if openedDropdown then pcall(function() openedDropdown:Close() end); openedDropdown = nil end
+			setScrollLock(false)
+			local o = overlay
+			overlay = nil
+			if o then
+				o.Interactable = false -- no clicks during the fade-out (buttons live for 0.3s otherwise)
+				tween(scrim, TI_MED, { BackgroundTransparency = 1 })
+				if cardScale then tween(cardScale, TI_MED, { Scale = 0.9 }) end
+				if hlBox then tween(hlBox, TI_FAST, { Size = UDim2.fromOffset(math.floor(cw + 24), math.floor(ch + 24)) }) end
+				task.delay(0.3, function() if o then o:Destroy() end end)
+			end
+			runCallback(skipped and TutorialSettings.OnSkip or TutorialSettings.OnFinish, index + 1)
+		end
+
 		local function build()
-			overlay = create("CanvasGroup", {
+			overlay = create("Frame", {
 				Name = "Tutorial",
 				BackgroundTransparency = 1,
 				Size = UDim2.fromScale(1, 1),
-				GroupTransparency = 1,
+				Visible = false,
 				ZIndex = 940,
 				Parent = window,
 			})
-			round(overlay, GenStyle.windowCorner)
-			overlay.ClipsDescendants = true
-
+			-- dim + input blocker (a rounded button so corners match the window)
 			scrim = create("TextButton", {
-				Text = "",
-				AutoButtonColor = false,
+				Text = "", AutoButtonColor = false,
 				BackgroundColor3 = Color3.fromRGB(6, 6, 8),
 				BackgroundTransparency = 1,
 				Size = UDim2.fromScale(1, 1),
 				ZIndex = 1,
 				Parent = overlay,
 			})
+			round(scrim, GenStyle.windowCorner)
+			scrim.MouseButton1Click:Connect(function() end) -- swallow every click
 
-			-- the highlight ring around a targeted element
-			spot = create("Frame", {
+			-- the rounded spotlight box that tracks the target
+			hlBox = create("Frame", {
 				BackgroundTransparency = 1,
 				Visible = false,
 				ZIndex = 2,
 				Parent = overlay,
 			})
-			round(spot, 8)
-			local spotStroke = create("UIStroke", { Thickness = 2, Transparency = 0.1, Parent = spot })
-			paint(spotStroke, "Color", "Accent")
-
-			cardHolder = create("Frame", {
+			round(hlBox, 10)
+			local boxStroke = create("UIStroke", { Thickness = 2.5, Transparency = 0, Parent = hlBox })
+			paint(boxStroke, "Color", "Accent")
+			hlGlow = create("Frame", {
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.new(1, -60, 0, 0),
+				Size = UDim2.new(1, 14, 1, 14),
+				BackgroundTransparency = 1,
+				ZIndex = 2,
+				Parent = hlBox,
+			})
+			round(hlGlow, 14)
+			local glowStroke = create("UIStroke", { Thickness = 5, Transparency = 0.72, Parent = hlGlow })
+			paint(glowStroke, "Color", "Accent")
+
+			-- info card
+			cardHolder = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(0.5, 0, 0.5, 0),
+				Size = UDim2.new(1, -48, 0, 0),
 				AutomaticSize = Enum.AutomaticSize.Y,
 				BackgroundColor3 = Theme.Card,
-				ZIndex = 3,
+				ZIndex = 6,
 				Parent = overlay,
 			})
 			paint(cardHolder, "BackgroundColor3", "Card")
 			create("UISizeConstraint", { MaxSize = Vector2.new(360, math.huge), Parent = cardHolder })
-			cardScale = create("UIScale", { Scale = 0.94, Parent = cardHolder })
+			cardScale = create("UIScale", { Scale = 0.9, Parent = cardHolder })
 			round(cardHolder, math.max(10, GenStyle.cardRadius + 4))
-			local chStroke = create("UIStroke", { Transparency = 0.85, Thickness = 1, Parent = cardHolder })
+			local chStroke = create("UIStroke", { Transparency = 0.82, Thickness = 1, Parent = cardHolder })
 			paint(chStroke, "Color", "Stroke")
-			padAll(cardHolder, 20, 20, 18, 20)
+			padAll(cardHolder, 18, 18, 16, 18)
 			create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
 				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 14),
+				Padding = UDim.new(0, 10),
 				Parent = cardHolder,
 			})
 
-			-- body (icon + title + content), crossfaded on step change
-			body = create("CanvasGroup", {
-				BackgroundTransparency = 1,
-				AutomaticSize = Enum.AutomaticSize.Y,
-				Size = UDim2.new(1, 0, 0, 0),
-				GroupTransparency = 0,
-				LayoutOrder = 1,
-				ZIndex = 3,
-				Parent = cardHolder,
-			})
-			create("UIListLayout", {
-				FillDirection = Enum.FillDirection.Vertical,
-				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 8),
-				Parent = body,
-			})
 			iconImg = create("ImageLabel", {
 				BackgroundTransparency = 1,
-				Size = UDim2.fromOffset(26, 26),
+				Size = UDim2.fromOffset(24, 24),
 				ImageColor3 = Theme.Accent,
 				LayoutOrder = 1,
-				ZIndex = 3,
-				Parent = body,
+				ZIndex = 6,
+				Parent = cardHolder,
 			})
 			paint(iconImg, "ImageColor3", "Accent")
 			titleLbl = create("TextLabel", {
@@ -9053,13 +9225,13 @@ local function _constructWindow(Settings)
 				AutomaticSize = Enum.AutomaticSize.Y,
 				Size = UDim2.new(1, 0, 0, 0),
 				Font = FONT_BOLD,
-				TextSize = 19,
+				TextSize = 18,
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextWrapped = true,
 				Text = "",
 				LayoutOrder = 2,
-				ZIndex = 3,
-				Parent = body,
+				ZIndex = 6,
+				Parent = cardHolder,
 			})
 			paint(titleLbl, "TextColor3", "TextTitle")
 			contentLbl = create("TextLabel", {
@@ -9068,14 +9240,14 @@ local function _constructWindow(Settings)
 				Size = UDim2.new(1, 0, 0, 0),
 				Font = FONT_REGULAR,
 				TextSize = 14,
-				LineHeight = 1.12,
+				LineHeight = 1.14,
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextYAlignment = Enum.TextYAlignment.Top,
 				TextWrapped = true,
 				Text = "",
 				LayoutOrder = 3,
-				ZIndex = 3,
-				Parent = body,
+				ZIndex = 6,
+				Parent = cardHolder,
 			})
 			paint(contentLbl, "TextColor3", "TextSub")
 
@@ -9083,8 +9255,8 @@ local function _constructWindow(Settings)
 			dotsRow = create("Frame", {
 				BackgroundTransparency = 1,
 				Size = UDim2.new(1, 0, 0, 8),
-				LayoutOrder = 2,
-				ZIndex = 3,
+				LayoutOrder = 4,
+				ZIndex = 6,
 				Parent = cardHolder,
 			})
 			create("UIListLayout", {
@@ -9101,19 +9273,19 @@ local function _constructWindow(Settings)
 					BackgroundColor3 = Theme.TextMuted,
 					Size = UDim2.fromOffset(6, 6),
 					LayoutOrder = i,
-					ZIndex = 3,
+					ZIndex = 6,
 					Parent = dotsRow,
 				})
 				roundFull(dot)
 				dots[i] = dot
 			end
 
-			-- footer: Skip on the left, Back + Next on the right
+			-- footer: Skip left, Back + Next right
 			local footer = create("Frame", {
 				BackgroundTransparency = 1,
 				Size = UDim2.new(1, 0, 0, 36),
-				LayoutOrder = 3,
-				ZIndex = 3,
+				LayoutOrder = 5,
+				ZIndex = 6,
 				Parent = cardHolder,
 			})
 			skipBtn = create("TextButton", {
@@ -9125,7 +9297,7 @@ local function _constructWindow(Settings)
 				TextSize = 14,
 				TextXAlignment = Enum.TextXAlignment.Left,
 				Text = TutorialSettings.SkipText or "Skip",
-				ZIndex = 3,
+				ZIndex = 6,
 				Parent = footer,
 			})
 			paint(skipBtn, "TextColor3", "TextMuted")
@@ -9141,7 +9313,7 @@ local function _constructWindow(Settings)
 				TextSize = 14,
 				Text = "Back",
 				Visible = false,
-				ZIndex = 3,
+				ZIndex = 6,
 				Parent = footer,
 			})
 			paint(backBtn, "BackgroundColor3", "CardInset")
@@ -9156,7 +9328,7 @@ local function _constructWindow(Settings)
 				Position = UDim2.new(1, 0, 0.5, 0),
 				Size = UDim2.fromOffset(100, 34),
 				Text = "",
-				ZIndex = 3,
+				ZIndex = 6,
 				Parent = footer,
 			})
 			paint(nextBtn, "BackgroundColor3", "Accent")
@@ -9166,7 +9338,7 @@ local function _constructWindow(Settings)
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
 				Size = UDim2.fromOffset(88, 20),
-				ZIndex = 4,
+				ZIndex = 7,
 				Parent = nextBtn,
 			})
 			create("UIListLayout", {
@@ -9186,7 +9358,7 @@ local function _constructWindow(Settings)
 				TextColor3 = Color3.fromRGB(255, 255, 255),
 				Text = "Next",
 				LayoutOrder = 1,
-				ZIndex = 4,
+				ZIndex = 7,
 				Parent = nextRow,
 			})
 			nextIcon = create("ImageLabel", {
@@ -9194,14 +9366,13 @@ local function _constructWindow(Settings)
 				Size = UDim2.fromOffset(15, 15),
 				ImageColor3 = Color3.fromRGB(255, 255, 255),
 				LayoutOrder = 2,
-				ZIndex = 4,
+				ZIndex = 7,
 				Parent = nextRow,
 			})
 			applyLucide(nextIcon, "arrow-right")
 			nextBtn.MouseEnter:Connect(function() tween(nextBtn, TI_FAST, { BackgroundColor3 = Theme.AccentSoft or Theme.Accent }) end)
 			nextBtn.MouseLeave:Connect(function() tween(nextBtn, TI_FAST, { BackgroundColor3 = Theme.Accent }) end)
 
-			scrim.MouseButton1Click:Connect(function() end) -- eat clicks to the menu behind
 			skipBtn.MouseButton1Click:Connect(function() finish(true) end)
 			backBtn.MouseButton1Click:Connect(function() if index > 0 then show(index - 1, -1) end end)
 			nextBtn.MouseButton1Click:Connect(function()
@@ -9214,8 +9385,11 @@ local function _constructWindow(Settings)
 			if #steps == 0 then return end
 			active = true
 			build()
-			tween(scrim, TI_MED, { BackgroundTransparency = 0.45 })
-			tween(overlay, TI_MED, { GroupTransparency = 0 })
+			setScrollLock(true)
+			startTracking()
+			overlay.Visible = true
+			tween(scrim, TI_MED, { BackgroundTransparency = 0.42 })
+			cardScale.Scale = 0.9
 			tween(cardScale, TI_SMOOTH, { Scale = 1 })
 			show((tonumber(startIndex) or 1) - 1, 1)
 		end
