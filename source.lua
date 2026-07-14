@@ -67,6 +67,23 @@ local function fetch(url)
 	return nil
 end
 
+-- JSON POST through the executor's request function. Returns the response
+-- table ({StatusCode, Body, ...}) or nil plus an error string.
+local function httpPost(url, headers, bodyTable)
+	local req = (syn and syn.request) or request or http_request
+	if not req then return nil, "This executor has no request function" end
+	local ok, res = pcall(function()
+		return req({
+			Url = url,
+			Method = "POST",
+			Headers = headers,
+			Body = HttpService:JSONEncode(bodyTable),
+		})
+	end)
+	if not ok then return nil, tostring(res) end
+	return res
+end
+
 local function guiParent()
 	if useStudio then
 		return LocalPlayer:WaitForChild("PlayerGui")
@@ -1123,25 +1140,30 @@ function RayfieldLibrary:Dialog(data)
 		Size = UDim2.fromOffset(470, 120),
 		Image = dlgShadow or GLOW_IMAGE,
 		ImageColor3 = Color3.fromRGB(20, 20, 20),
-		ImageTransparency = 0.35,
+		ImageTransparency = 1,
 		ScaleType = Enum.ScaleType.Slice,
 		SliceCenter = dlgShadow and RAYFIELD_SHADOW.slice or Rect.new(49, 49, 450, 450),
 		ZIndex = 500,
 		Parent = overlay,
 	})
 
-	-- plain Frame, shown instantly (no scale/fade, which glitched on CanvasGroup)
-	local card = create("Frame", {
+	-- CanvasGroup so the exit can fade the whole card at once. GroupTransparency
+	-- stays 0 during open (tweening it while AutomaticSize settles caused the old
+	-- glitch); the entrance is Visible + UIScale, revealed one frame after layout.
+	local card = create("CanvasGroup", {
 		Name = "Card",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(430, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
+		GroupTransparency = 0,
+		Visible = false,
 		ZIndex = 501,
 		Parent = overlay,
 	})
 	paint(card, "BackgroundColor3", "Background")
 	round(card, math.max(18, GenStyle.windowCorner))
+	local dlgScale = create("UIScale", { Scale = 0.92, Parent = card })
 	local function syncShadow()
 		local s = card.AbsoluteSize
 		shadow.Size = UDim2.fromOffset(s.X + DLG_SHADOW_PAD * 2, s.Y + DLG_SHADOW_PAD * 2)
@@ -1160,7 +1182,15 @@ function RayfieldLibrary:Dialog(data)
 	local function close()
 		if closed then return end
 		closed = true
-		overlay:Destroy()
+		-- size is settled by now, so fading the group is safe (no layout glitch)
+		tween(overlay, TI_FAST, { BackgroundTransparency = 1 })
+		tween(shadow, TI_FAST, { ImageTransparency = 1 })
+		tween(card, TI_FAST, { GroupTransparency = 1 })
+		tween(dlgScale, TI_FAST, { Scale = 0.95 })
+		task.delay(0.16, function() overlay:Destroy() end)
+		if type(data.OnClose) == "function" then
+			task.spawn(data.OnClose)
+		end
 	end
 
 	-- title row: close (x) on the left, then the title
@@ -1266,8 +1296,15 @@ function RayfieldLibrary:Dialog(data)
 		end)
 	end
 
-	-- shown instantly, no animation
-	overlay.BackgroundTransparency = 0.5
+	-- smooth entrance: reveal one frame after the layout settles, then a quick
+	-- scale-up with the dim and shadow fading in alongside
+	task.defer(function()
+		if closed then return end
+		card.Visible = true
+		tween(overlay, TI_MED, { BackgroundTransparency = 0.5 })
+		tween(shadow, TI_MED, { ImageTransparency = 0.35 })
+		tween(dlgScale, TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Scale = 1 })
+	end)
 	return { Close = close }
 end
 
@@ -2132,7 +2169,10 @@ local function _constructWindow(Settings)
 				local searchName = item:GetAttribute("SearchName")
 				local structural = item:GetAttribute("Structural")
 				local composite = item:GetAttribute("Composite")
-				if query == "" then
+				if item:GetAttribute("DemandHidden") then
+					-- hidden via :SetVisible(false); the search never re-shows it
+					item.Visible = false
+				elseif query == "" then
 					item.Visible = true
 				elseif structural then
 					item.Visible = false
@@ -2562,6 +2602,22 @@ local function _constructWindow(Settings)
 				holder.Visible = visible
 			end
 			return DividerValue
+		end
+
+		-- Invisible vertical gap between elements
+		function Tab:CreateSpacer(height)
+			local holder = create("Frame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 0, math.clamp(tonumber(height) or 12, 2, 300)),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			holder:SetAttribute("Structural", true)
+			local SpacerValue = {}
+			function SpacerValue:Set(newHeight)
+				holder.Size = UDim2.new(1, 0, 0, math.clamp(tonumber(newHeight) or 12, 2, 300))
+			end
+			return SpacerValue
 		end
 
 		function Tab:CreateLabel(text, icon, color, _ignoreTheme)
@@ -7182,6 +7238,434 @@ local function _constructWindow(Settings)
 			return api
 		end
 
+		-- Built-in AI chat. Works out of the box through a free, rate-limited
+		-- provider (no API key needed). Users can plug in their own
+		-- OpenAI-compatible keys; keys stack, and when one fails the chat asks
+		-- before switching to the next.
+		function Tab:CreateAIChat(ChatSettings)
+			ChatSettings = ChatSettings or {}
+			local HEIGHT = math.clamp(tonumber(ChatSettings.Height) or 300, 220, 480)
+			local sysPrompt = ChatSettings.SystemPrompt or "You are a concise assistant inside a Roblox script menu. Answer briefly and helpfully."
+			local model = ChatSettings.Model or "gpt-4o-mini"
+			local endpoint = ChatSettings.Endpoint or "https://api.openai.com/v1/chat/completions"
+			local keys = {}
+			if type(ChatSettings.Keys) == "table" then
+				for _, k in ipairs(ChatSettings.Keys) do
+					if type(k) == "string" and #k > 0 then table.insert(keys, k) end
+				end
+			end
+			local keyIndex = #keys > 0 and 1 or nil -- nil = free built-in provider
+			local history = {}
+			local busy = false
+			local sendTimes = {}
+
+			local card = create("Frame", {
+				Size = UDim2.new(1, 0, 0, HEIGHT),
+				LayoutOrder = nextOrder(),
+				Parent = page,
+			})
+			card:SetAttribute("SearchName", ChatSettings.Name or "AI Chat")
+			paint(card, "BackgroundColor3", "Card")
+			cardBase(card)
+
+			-- header: bot icon, title, provider hint
+			local headIcon = makeIcon(card, "bot", 18, Theme.TextTitle, 0.04)
+			if headIcon then
+				headIcon.AnchorPoint = Vector2.new(0, 0.5)
+				headIcon.Position = UDim2.fromOffset(16, 23)
+			end
+			local headLabel = create("TextLabel", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(44, 13),
+				Size = UDim2.new(1, -160, 0, 20),
+				Font = FONT_BOLD,
+				TextSize = 16,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Text = ChatSettings.Name or "AI Chat",
+				Parent = card,
+			})
+			paint(headLabel, "TextColor3", "TextTitle")
+			local providerLabel = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AnchorPoint = Vector2.new(1, 0),
+				Position = UDim2.new(1, -16, 0, 16),
+				Size = UDim2.new(0, 110, 0, 14),
+				Font = FONT_MEDIUM,
+				TextSize = 12,
+				TextXAlignment = Enum.TextXAlignment.Right,
+				Text = keyIndex and ("key " .. keyIndex) or "built in",
+				Parent = card,
+			})
+			paint(providerLabel, "TextColor3", "TextMuted")
+
+			-- messages
+			local INPUT_H = 40
+			local msgs = create("ScrollingFrame", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(12, 44),
+				Size = UDim2.new(1, -24, 1, -44 - INPUT_H - 20),
+				CanvasSize = UDim2.new(0, 0, 0, 0),
+				AutomaticCanvasSize = Enum.AutomaticSize.Y,
+				ScrollingDirection = Enum.ScrollingDirection.Y,
+				ScrollBarThickness = 2,
+				ScrollBarImageColor3 = Color3.fromRGB(90, 90, 90),
+				BorderSizePixel = 0,
+				Parent = card,
+			})
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 8),
+				Parent = msgs,
+			})
+			padAll(msgs, 2, 4, 6, 2)
+
+			local msgOrder = 0
+			local function scrollBottom()
+				task.defer(function()
+					if msgs.Parent then
+						msgs.CanvasPosition = Vector2.new(0, math.max(0, msgs.AbsoluteCanvasSize.Y - msgs.AbsoluteSize.Y))
+					end
+				end)
+			end
+
+			local function textOnAccent()
+				local c = Theme.Accent
+				local lum = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B
+				return lum > 0.6 and Color3.fromRGB(20, 20, 20) or Color3.fromRGB(245, 245, 245)
+			end
+
+			-- one chat bubble; user bubbles sit right in accent, AI bubbles left
+			local function addBubble(text, isUser, muted)
+				msgOrder += 1
+				local row = create("Frame", {
+					BackgroundTransparency = 1,
+					AutomaticSize = Enum.AutomaticSize.Y,
+					Size = UDim2.new(1, 0, 0, 10),
+					LayoutOrder = msgOrder,
+					Parent = msgs,
+				})
+				local bubble = create("Frame", {
+					AnchorPoint = Vector2.new(isUser and 1 or 0, 0),
+					Position = isUser and UDim2.new(1, 0, 0, 0) or UDim2.new(0, 0, 0, 0),
+					AutomaticSize = Enum.AutomaticSize.XY,
+					BackgroundColor3 = isUser and Theme.Accent or Theme.CardHover,
+					Parent = row,
+				})
+				round(bubble, 12)
+				padAll(bubble, 8, 12, 8, 12)
+				local scale = create("UIScale", { Scale = 0.86, Parent = bubble })
+				local label = create("TextLabel", {
+					BackgroundTransparency = 1,
+					AutomaticSize = Enum.AutomaticSize.XY,
+					Size = UDim2.new(0, 0, 0, 0),
+					Font = FONT_MEDIUM,
+					TextSize = 14,
+					LineHeight = 1.15,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextWrapped = true,
+					TextTransparency = 1,
+					Text = text,
+					TextColor3 = isUser and textOnAccent() or (muted and Theme.TextMuted or Theme.TextBody),
+					Parent = bubble,
+				})
+				create("UISizeConstraint", { MaxSize = Vector2.new(300, math.huge), Parent = label })
+				tween(scale, TweenInfo.new(0.24, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
+				tween(label, TI_MED, { TextTransparency = 0 })
+				scrollBottom()
+				local B = {}
+				function B.setText(t, asMuted)
+					label.Text = t
+					label.TextColor3 = isUser and textOnAccent() or (asMuted and Theme.TextMuted or Theme.TextBody)
+					scrollBottom()
+				end
+				return B
+			end
+
+			-- input row: rounded box plus a circular accent send button
+			local inputHolder = create("Frame", {
+				AnchorPoint = Vector2.new(0, 1),
+				Position = UDim2.new(0, 14, 1, -12),
+				Size = UDim2.new(1, -14 - 14 - INPUT_H - 8, 0, INPUT_H - 4),
+				Parent = card,
+			})
+			paint(inputHolder, "BackgroundColor3", "CardInset")
+			roundFull(inputHolder)
+			create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Parent = inputHolder })
+			local box = create("TextBox", {
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 0),
+				Size = UDim2.new(1, -24, 1, 0),
+				Font = FONT_MEDIUM,
+				TextSize = 14,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				PlaceholderText = ChatSettings.Placeholder or "Ask anything",
+				PlaceholderColor3 = Theme.TextMuted,
+				Text = "",
+				ClearTextOnFocus = false,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				Parent = inputHolder,
+			})
+			paint(box, "TextColor3", "TextBody")
+			local sendBtn = create("TextButton", {
+				AnchorPoint = Vector2.new(1, 1),
+				Position = UDim2.new(1, -14, 1, -14),
+				Size = UDim2.fromOffset(INPUT_H - 4, INPUT_H - 4),
+				Text = "",
+				BackgroundColor3 = Theme.Accent,
+				Parent = card,
+			})
+			roundFull(sendBtn)
+			local sendIcon = makeIcon(sendBtn, "arrow-up", 18, textOnAccent())
+			if sendIcon then
+				sendIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+				sendIcon.Position = UDim2.fromScale(0.5, 0.5)
+			end
+
+			-- context the model sees
+			local function buildMessages()
+				local out = { { role = "system", content = sysPrompt } }
+				for _, m in ipairs(history) do table.insert(out, m) end
+				return out
+			end
+
+			local function keyedRequest(key)
+				local res, rerr = httpPost(endpoint, {
+					["Content-Type"] = "application/json",
+					["Authorization"] = "Bearer " .. key,
+				}, { model = model, messages = buildMessages(), max_tokens = 350, temperature = 0.7 })
+				if not res then return nil, rerr or "request failed", false end
+				local code = tonumber(res.StatusCode or res.status_code) or 0
+				if code == 401 or code == 402 or code == 403 or code == 429 then
+					return nil, "HTTP " .. code, true -- key problem: exhausted/invalid/rate limited
+				end
+				if code < 200 or code >= 300 then return nil, "HTTP " .. code, false end
+				local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+				local content = ok and type(data) == "table" and data.choices and data.choices[1]
+					and data.choices[1].message and data.choices[1].message.content
+				if type(content) == "string" and #content > 0 then return content end
+				return nil, "empty response", false
+			end
+
+			local function freeRequest()
+				-- OpenAI-shaped free endpoint first (keeps conversation context)
+				local res = httpPost("https://text.pollinations.ai/openai", {
+					["Content-Type"] = "application/json",
+				}, { model = "openai", messages = buildMessages() })
+				if res then
+					local code = tonumber(res.StatusCode or res.status_code) or 0
+					if code >= 200 and code < 300 then
+						local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+						local content = ok and type(data) == "table" and data.choices and data.choices[1]
+							and data.choices[1].message and data.choices[1].message.content
+						if type(content) == "string" and #content > 0 then return content end
+						if ok and type(data) ~= "table" and type(res.Body) == "string" and #res.Body > 0 then
+							return res.Body
+						end
+					end
+				end
+				-- plain GET fallback: compact transcript in the prompt
+				local lines = { sysPrompt }
+				for _, m in ipairs(history) do
+					table.insert(lines, (m.role == "user" and "User: " or "Assistant: ") .. m.content)
+				end
+				table.insert(lines, "Assistant:")
+				local raw = fetch("https://text.pollinations.ai/" .. HttpService:UrlEncode(table.concat(lines, "\n")))
+				if type(raw) == "string" and #raw > 0 then return raw end
+				return nil, "the free AI service is unreachable"
+			end
+
+			-- blocking yes/no through the dialog. Closing with the X counts as no,
+			-- and a 30s timeout closes the dialog and counts as no.
+			local function askSwitch(title, content, yesText)
+				if not msgs.Parent then return false end -- UI is gone, never resurrect a dialog
+				local result = nil
+				local handle = RayfieldLibrary:Dialog({
+					Title = title,
+					Content = content,
+					OnClose = function()
+						if result == nil then result = false end
+					end,
+					Options = {
+						{ Text = "Cancel", Callback = function() result = false end },
+						{ Text = yesText, Primary = true, Callback = function() result = true end },
+					},
+				})
+				local t0 = os.clock()
+				while result == nil and os.clock() - t0 < 30 do task.wait(0.1) end
+				if result == nil and handle then pcall(handle.Close) end
+				return result == true
+			end
+
+			local function pushHistory(role, content)
+				table.insert(history, { role = role, content = content })
+				while #history > 10 do table.remove(history, 1) end
+			end
+
+			-- bumped by Clear(); in-flight replies from an older epoch are dropped
+			local chatEpoch = 0
+
+			local function send(text)
+				text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+				if text == "" then return end
+				if busy then
+					addBubble("One message at a time, please.", false, true)
+					return
+				end
+				-- rate limit (tighter on the free provider)
+				local now = os.clock()
+				local minGap = keyIndex and 1.5 or 4
+				local perMin = keyIndex and 20 or 8
+				for i = #sendTimes, 1, -1 do
+					if now - sendTimes[i] > 60 then table.remove(sendTimes, i) end
+				end
+				if (#sendTimes > 0 and now - sendTimes[#sendTimes] < minGap) or #sendTimes >= perMin then
+					addBubble("Slow down a little, then try again.", false, true)
+					return
+				end
+				table.insert(sendTimes, now)
+
+				busy = true
+				box.Text = ""
+				addBubble(text, true)
+				pushHistory("user", text)
+
+				local thinking = addBubble("\u{00B7}", false, true)
+				local thinkAlive = true
+				local myEpoch = chatEpoch
+				task.spawn(function()
+					local i = 0
+					local frames = { "\u{00B7}", "\u{00B7}\u{00B7}", "\u{00B7}\u{00B7}\u{00B7}" }
+					while thinkAlive and msgs.Parent and chatEpoch == myEpoch do
+						i = i % 3 + 1
+						thinking.setText(frames[i], true)
+						task.wait(0.35)
+					end
+				end)
+
+				task.spawn(function()
+					local reply, err
+					while true do
+						if not msgs.Parent or chatEpoch ~= myEpoch then break end -- UI gone or cleared
+						if keyIndex then
+							local keyFail
+							reply, err, keyFail = keyedRequest(keys[keyIndex])
+							if reply or not keyFail then break end
+							if not msgs.Parent or chatEpoch ~= myEpoch then break end -- cleared/destroyed while requesting
+							if keyIndex < #keys then
+								if askSwitch("API key " .. keyIndex .. " failed",
+									"That key returned " .. tostring(err) .. ". Switch to key " .. (keyIndex + 1) .. " and retry?",
+									"Switch") then
+									keyIndex += 1
+									providerLabel.Text = "key " .. keyIndex
+								else break end
+							else
+								if askSwitch("All API keys failed",
+									"The last key returned " .. tostring(err) .. ". Use the free built-in AI instead?",
+									"Use free") then
+									keyIndex = nil
+									providerLabel.Text = "built in"
+								else break end
+							end
+						else
+							reply, err = freeRequest()
+							break
+						end
+					end
+					thinkAlive = false
+					busy = false
+					-- drop the reply if the chat was cleared or destroyed meanwhile
+					if not msgs.Parent or chatEpoch ~= myEpoch then return end
+					if reply then
+						reply = tostring(reply):gsub("^%s+", ""):gsub("%s+$", "")
+						thinking.setText(reply, false)
+						pushHistory("assistant", reply)
+					else
+						thinking.setText("Could not reply: " .. tostring(err or "unknown error"), true)
+					end
+				end)
+			end
+
+			sendBtn.MouseButton1Click:Connect(function()
+				tween(sendBtn, TweenInfo.new(0.07, Enum.EasingStyle.Quad), { BackgroundColor3 = Theme.AccentSoft })
+				task.delay(0.09, function() tween(sendBtn, TI_MED, { BackgroundColor3 = Theme.Accent }) end)
+				send(box.Text)
+			end)
+			box.FocusLost:Connect(function(enterPressed)
+				if enterPressed then send(box.Text) end
+			end)
+
+			if ChatSettings.Greeting ~= false then
+				addBubble(type(ChatSettings.Greeting) == "string" and ChatSettings.Greeting or "Hi! Ask me anything.", false)
+			end
+
+			local AIChat = { Type = "AIChat" }
+			function AIChat:Ask(text) send(text) end
+			function AIChat:AddKey(key)
+				if type(key) == "string" and #key > 0 then
+					table.insert(keys, key)
+					if not keyIndex then
+						keyIndex = #keys
+						providerLabel.Text = "key " .. keyIndex
+					end
+				end
+			end
+			function AIChat:Clear()
+				chatEpoch += 1 -- invalidates any in-flight reply
+				history = {}
+				busy = false
+				for _, c in ipairs(msgs:GetChildren()) do
+					if c:IsA("GuiObject") then c:Destroy() end
+				end
+				msgOrder = 0
+			end
+			function AIChat:SetSystemPrompt(p)
+				if type(p) == "string" then sysPrompt = p end
+			end
+			return AIChat
+		end
+
+		-- Elements on demand: every factory's handle gains :SetVisible(state) so
+		-- scripts can reveal or hide elements dynamically (e.g. a dropdown choice
+		-- showing extra options). We diff the page's children around the factory
+		-- call, so an element's card AND its description row hide together.
+		do
+			local names = {}
+			for name, fn in pairs(Tab) do
+				if type(fn) == "function" and string.sub(name, 1, 6) == "Create" then
+					table.insert(names, name)
+				end
+			end
+			for _, name in ipairs(names) do
+				local fn = Tab[name]
+				Tab[name] = function(selfArg, ...)
+					local before = {}
+					for _, c in ipairs(page:GetChildren()) do before[c] = true end
+					local rets = table.pack(fn(selfArg, ...))
+					local mine = {}
+					for _, c in ipairs(page:GetChildren()) do
+						if not before[c] and c:IsA("GuiObject") then table.insert(mine, c) end
+					end
+					local handle = rets[1]
+					if type(handle) == "table" and handle.SetVisible == nil and #mine > 0 then
+						handle._visibleState = true
+						function handle:SetVisible(state)
+							state = state and true or false
+							handle._visibleState = state
+							for _, inst in ipairs(mine) do
+								if inst.Parent then
+									inst.Visible = state
+									inst:SetAttribute("DemandHidden", (not state) or nil)
+								end
+							end
+						end
+					end
+					return table.unpack(rets, 1, rets.n)
+				end
+			end
+		end
+
 		return Tab
 	end
 
@@ -7388,6 +7872,40 @@ local function _constructWindow(Settings)
 				unlockCursor=value
 			end,
 		})
+		-- Live session dashboard: who is running, how busy the server is, and how
+		-- the client is doing, refreshed every second while the menu exists.
+		SettingsTab:CreateSection("Session")
+		local playerRow = SettingsTab:CreateLabel("Player  " .. (LocalPlayer and LocalPlayer.Name or "Unknown"), "user")
+		local clientsRow = SettingsTab:CreateLabel("Active clients  ...", "users")
+		local uptimeRow = SettingsTab:CreateLabel("Uptime  0s", "timer")
+		local fpsRow = SettingsTab:CreateLabel("FPS  ...", "activity")
+		do
+			local sessionStart = os.clock()
+			local frames = 0
+			connect(RunService.RenderStepped, function() frames += 1 end)
+			task.spawn(function()
+				while not destroyed and page.Parent do
+					task.wait(1)
+					if destroyed or not page.Parent then break end
+					pcall(function()
+						local secs = math.floor(os.clock() - sessionStart)
+						local up
+						if secs >= 3600 then
+							up = string.format("%dh %dm", math.floor(secs / 3600), math.floor(secs % 3600 / 60))
+						elseif secs >= 60 then
+							up = string.format("%dm %ds", math.floor(secs / 60), secs % 60)
+						else
+							up = secs .. "s"
+						end
+						clientsRow:Set("Active clients  " .. #Players:GetPlayers() .. " in server")
+						uptimeRow:Set("Uptime  " .. up)
+						fpsRow:Set("FPS  " .. frames)
+						frames = 0
+					end)
+				end
+			end)
+		end
+
 		SettingsTab:CreateSection("Configuration")
 		SettingsTab:CreateLabel(configEnabled and ("Saving to " .. configFolder .. "/" .. configFile .. ".json") or "Configuration saving is off", "folder")
 		SettingsTab:CreateSection("About")
@@ -7898,24 +8416,34 @@ end
 local function snapshotValues(node)
 	walkNodes(node, function(child)
 		local real = child.cell and child.cell.real
-		if type(real) == "table" and real.Type and VALUE_FIELD[real.Type] then
-			local val = real[VALUE_FIELD[real.Type]]
-			if type(val) == "table" then
-				local copy = {}
-				for i, x in ipairs(val) do copy[i] = x end
-				val = copy
+		if type(real) == "table" then
+			if real.Type and VALUE_FIELD[real.Type] then
+				local val = real[VALUE_FIELD[real.Type]]
+				if type(val) == "table" then
+					local copy = {}
+					for i, x in ipairs(val) do copy[i] = x end
+					val = copy
+				end
+				child.savedValue = val
 			end
-			child.savedValue = val
+			if real._visibleState ~= nil then
+				child.savedVisible = real._visibleState
+			end
 		end
 	end)
 end
 
 local function restoreValues(node)
 	walkNodes(node, function(child)
+		local real = child.cell and child.cell.real
 		if child.savedValue ~= nil then
-			local real = child.cell and child.cell.real
 			if type(real) == "table" and type(real.Set) == "function" then
 				pcall(function() real:Set(child.savedValue) end)
+			end
+		end
+		if child.savedVisible == false then
+			if type(real) == "table" and type(real.SetVisible) == "function" then
+				pcall(function() real:SetVisible(false) end)
 			end
 		end
 	end)
