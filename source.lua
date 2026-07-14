@@ -7392,16 +7392,24 @@ local function _constructWindow(Settings)
 
 			-- messages
 			local INPUT_H = 40
-			local msgs = create("ScrollingFrame", {
+			-- CanvasGroup + gradient so the messages fade out at the scroll edges
+			local msgsWrap = create("CanvasGroup", {
 				BackgroundTransparency = 1,
+				GroupTransparency = 0,
 				Position = UDim2.fromOffset(12, 44),
 				Size = UDim2.new(1, -24, 1, -44 - INPUT_H - 20),
+				Parent = card,
+			})
+			local msgsFade = create("UIGradient", { Rotation = 90, Parent = msgsWrap })
+			local msgs = create("ScrollingFrame", {
+				BackgroundTransparency = 1,
+				Size = UDim2.fromScale(1, 1),
 				CanvasSize = UDim2.new(0, 0, 0, 0),
 				AutomaticCanvasSize = Enum.AutomaticSize.Y,
 				ScrollingDirection = Enum.ScrollingDirection.Y,
 				ScrollBarThickness = 0,
 				BorderSizePixel = 0,
-				Parent = card,
+				Parent = msgsWrap,
 			})
 			create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
@@ -7411,12 +7419,37 @@ local function _constructWindow(Settings)
 			})
 			padAll(msgs, 2, 4, 6, 2)
 
+			local FADE_EDGE = 0.06
+			local function updateMsgFade()
+				local vh = msgs.AbsoluteWindowSize.Y
+				if vh <= 0 then return end
+				local pos = msgs.CanvasPosition.Y
+				local maxScroll = math.max(0, msgs.AbsoluteCanvasSize.Y - vh)
+				local topT = math.clamp(pos / 22, 0, 1)
+				local botT = math.clamp((maxScroll - pos) / 22, 0, 1)
+				if topT <= 0.001 and botT <= 0.001 then
+					msgsFade.Transparency = NumberSequence.new(0)
+				else
+					msgsFade.Transparency = NumberSequence.new({
+						NumberSequenceKeypoint.new(0, topT),
+						NumberSequenceKeypoint.new(FADE_EDGE, 0),
+						NumberSequenceKeypoint.new(1 - FADE_EDGE, 0),
+						NumberSequenceKeypoint.new(1, botT),
+					})
+				end
+			end
+			msgs:GetPropertyChangedSignal("CanvasPosition"):Connect(updateMsgFade)
+			msgs:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(updateMsgFade)
+			msgs:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(updateMsgFade)
+			task.defer(updateMsgFade)
+
 			local msgOrder = 0
 			local function scrollBottom()
 				task.defer(function()
 					if msgs.Parent then
 						msgs.CanvasPosition = Vector2.new(0, math.max(0, msgs.AbsoluteCanvasSize.Y - msgs.AbsoluteSize.Y))
 					end
+					task.defer(updateMsgFade)
 				end)
 			end
 
