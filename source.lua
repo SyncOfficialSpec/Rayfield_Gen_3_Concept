@@ -2948,8 +2948,9 @@ local function _constructWindow(Settings)
 			return body
 		end
 
-		local function keyedRequest(key)
-			local ep, mdl, provider = providerFor(key)
+		-- one full attempt against a specific provider. The 4th return is a "kind"
+		-- tag so the caller can react (e.g. try another provider on an auth reject).
+		local function attemptProvider(key, ep, mdl, provider)
 			for attempt = 1, 3 do
 				local res, rerr = httpPost(ep, {
 					["Content-Type"] = "application/json",
@@ -2963,28 +2964,41 @@ local function _constructWindow(Settings)
 				if code >= 200 and code < 300 then return parseChatBody(res.Body) end
 				local low = string.lower(tostring(res.Body or ""))
 				if code == 429 then
-					-- a dead/keyless-quota key never recovers, so switch straight away;
-					-- a plain rate limit clears, so back off and retry a couple of times
 					if low:find("insufficient_quota") or low:find("exceeded your current quota") or low:find("billing") then
-						return nil, provider .. " key has no credit or quota left", true
+						return nil, provider .. " key has no credit or quota left", true, "quota"
 					end
-					if attempt < 3 then task.wait(2.5) else return nil, provider .. " is rate limited, try again soon", true end
+					if attempt < 3 then task.wait(2.5) else return nil, provider .. " is rate limited, try again soon", true, "rate" end
 				elseif code == 401 or code == 403 then
-					local extra = (provider == "OpenAI") and ". If it is not an OpenAI key, pick the right provider in the gear" or ""
-					return nil, provider .. " rejected this key (HTTP " .. code .. ")" .. extra, true
+					return nil, provider .. " rejected this key (HTTP " .. code .. ")", true, "auth"
 				elseif code == 400 then
-					-- 400 is usually a bad/blank key (Google), sometimes a bad model
 					if low:find("model") and not (low:find("api key") or low:find("api_key")) then
-						return nil, provider .. " could not use model \"" .. tostring(mdl) .. "\"", true
+						return nil, provider .. " could not use model \"" .. tostring(mdl) .. "\"", true, "model"
 					end
-					return nil, provider .. " rejected this key (HTTP 400)", true
+					return nil, provider .. " rejected this key (HTTP 400)", true, "auth"
 				elseif code == 404 then
-					return nil, provider .. " could not use model \"" .. tostring(mdl) .. "\" (HTTP 404)", true
+					return nil, provider .. " could not use model \"" .. tostring(mdl) .. "\" (HTTP 404)", true, "model"
 				else
 					return nil, "HTTP " .. code, false
 				end
 			end
-			return nil, provider .. " is rate limited, try again soon", true
+			return nil, provider .. " is rate limited, try again soon", true, "rate"
+		end
+
+		local function keyedRequest(key)
+			local ep, mdl, provider = providerFor(key)
+			local reply, err, keyFail, kind = attemptProvider(key, ep, mdl, provider)
+			-- a generic sk- key OpenAI rejects might actually be a DeepSeek key, so
+			-- try that automatically before giving up (only when nothing is forced)
+			if not reply and kind == "auth" and aiProvider == "Auto" and provider == "OpenAI"
+				and tostring(key):sub(1, 3) == "sk-" then
+				local dp = AI_PROVIDERS.DeepSeek
+				local r2 = attemptProvider(key, dp.endpoint, ChatSettings.Model or dp.model, "DeepSeek")
+				if r2 then return r2 end
+			end
+			if not reply and kind == "auth" and provider == "OpenAI" then
+				err = err .. ". If it is not an OpenAI key, pick the right provider in the gear"
+			end
+			return reply, err, keyFail
 		end
 
 		local function freePost(withModel)
@@ -8217,11 +8231,7 @@ local function _constructWindow(Settings)
 			round(coverBar, math.max(6, GenStyle.cardRadius - 2))
 			create("UIGradient", {
 				Rotation = 90,
-				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(202, 202, 202)),
-				Transparency = NumberSequence.new({
-					NumberSequenceKeypoint.new(0, 0.9),
-					NumberSequenceKeypoint.new(1, 0.97),
-				}),
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(232, 232, 232)),
 				Parent = coverBar,
 			})
 			local coverStroke = create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = coverBar })
@@ -9016,6 +9026,11 @@ local function _constructWindow(Settings)
 	-- right tab, scrolls the element into view, optionally opens it (dropdowns),
 	-- and frames it with a rounded spotlight that tracks it live. While it runs
 	-- the user cannot scroll or click the menu; the tutorial does everything.
+	-- A "Get Started" tutorial that drives the menu. Each step points at an element
+	-- (its handle or its .Card); the tutorial switches to the right tab, scrolls it
+	-- into view, optionally opens it (dropdowns), and draws ONE rounded rectangle on
+	-- it. The explanation card floats OUTSIDE the window (never over the menu) and
+	-- the menu is not dimmed. While it runs the user cannot touch the menu.
 	function Window:CreateTutorial(TutorialSettings)
 		TutorialSettings = TutorialSettings or {}
 		local rawSteps = TutorialSettings.Steps or TutorialSettings.steps or {}
@@ -9035,17 +9050,19 @@ local function _constructWindow(Settings)
 		end
 
 		local PAD = 6
+		local CARD_W = 300
 		local handle = {}
 		local active, index, epoch = false, 0, 0
-		local overlay, scrim, hlBox, hlGlow, cardHolder, cardScale, iconImg, titleLbl, contentLbl, dotsRow, backBtn, nextBtn, nextLbl, nextIcon, skipBtn
+		local overlay, blocker, hlBox, cardHolder, cardScale, iconImg, titleLbl, contentLbl, dotsRow, backBtn, nextBtn, nextLbl, nextIcon, skipBtn
 		local dots = {}
 		local trackConn, trackTarget, openedDropdown
 		local cx, cy, cw, ch, gx, gy, gw, gh, haveGoal = 0, 0, 0, 0, 0, 0, 0, 0, false
 
+		-- rect of a gui object relative to the overlay (full-screen space)
 		local function rectOf(obj)
-			local wp = window.AbsolutePosition
+			local op = overlay and overlay.AbsolutePosition or Vector2.new(0, 0)
 			local tp, ts = obj.AbsolutePosition, obj.AbsoluteSize
-			return tp.X - wp.X, tp.Y - wp.Y, ts.X, ts.Y
+			return tp.X - op.X, tp.Y - op.Y, ts.X, ts.Y
 		end
 
 		local function tabOf(obj)
@@ -9075,10 +9092,7 @@ local function _constructWindow(Settings)
 			gx, gy, gw, gh = x - PAD, y - PAD, w + 2 * PAD, h + 2 * PAD
 			haveGoal = true
 		end
-
-		local function snapToGoal()
-			cx, cy, cw, ch = gx, gy, gw, gh
-		end
+		local function snapToGoal() cx, cy, cw, ch = gx, gy, gw, gh end
 
 		local function startTracking()
 			trackConn = connect(RunService.RenderStepped, function()
@@ -9097,45 +9111,49 @@ local function _constructWindow(Settings)
 			end)
 		end
 
-		local function positionCard(side)
-			local WH = window.AbsoluteSize.Y
-			local cardH = math.max(150, cardHolder.AbsoluteSize.Y)
-			local cy
-			if side == "top" then cy = 14 + cardH / 2
-			elseif side == "bottom" then cy = WH - 14 - cardH / 2
-			else cy = WH / 2 end
-			tween(cardHolder, TI_SMOOTH, { Position = UDim2.new(0.5, 0, 0, cy) })
-		end
-
-		-- Scroll so the target lands in the area the card is NOT covering, then
-		-- park the card against the opposite edge. The card never hides the target;
-		-- a tall target (open dropdown) is top-aligned so its header stays visible.
-		local function frameTarget(obj, page, side)
-			positionCard(side)
+		-- centre the target in the window's viewport (the card is outside, so no
+		-- need to keep it clear of anything)
+		local function scrollTo(page, obj)
 			if not page then return end
 			local vh = page.AbsoluteWindowSize.Y
 			if vh <= 0 then return end
-			local WH = window.AbsoluteSize.Y
-			local pageTop = page.AbsolutePosition.Y - window.AbsolutePosition.Y
-			local cardH = math.max(150, cardHolder.AbsoluteSize.Y)
-			local M = 16
-			local freeTop, freeBot
-			if side == "top" then
-				freeTop, freeBot = 14 + cardH + M, pageTop + vh
-			else
-				freeTop, freeBot = pageTop, (WH - 14 - cardH) - M
-			end
-			freeTop = math.max(freeTop, pageTop)
-			freeBot = math.min(freeBot, pageTop + vh)
-			local freeH = math.max(0, freeBot - freeTop)
-			local _, ty, _, th = rectOf(obj)
-			local desiredWinY
-			if th <= freeH then desiredWinY = freeTop + (freeH - th) / 2
-			elseif side == "top" then desiredWinY = freeTop
-			else desiredWinY = freeBot - th end
-			local goal = page.CanvasPosition.Y + (ty - desiredWinY)
+			local objCanvasY = (obj.AbsolutePosition.Y - page.AbsolutePosition.Y) + page.CanvasPosition.Y
+			local goal = objCanvasY - (vh - obj.AbsoluteSize.Y) / 2
 			goal = math.clamp(goal, 0, math.max(0, page.AbsoluteCanvasSize.Y - vh))
 			tween(page, TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { CanvasPosition = Vector2.new(0, goal) })
+		end
+
+		-- park the card just OUTSIDE the window: right, else left, else below/above,
+		-- aligned to the target's height
+		local function positionCard(obj)
+			if not cardHolder then return end
+			local ox, oy = overlay.AbsolutePosition.X, overlay.AbsolutePosition.Y
+			local sw, sh = overlay.AbsoluteSize.X, overlay.AbsoluteSize.Y
+			local winX = window.AbsolutePosition.X - ox
+			local winY = window.AbsolutePosition.Y - oy
+			local winW, winH = window.AbsoluteSize.X, window.AbsoluteSize.Y
+			local cardH = math.max(120, cardHolder.AbsoluteSize.Y)
+			local gap = 18
+			local aimY = winY + winH / 2
+			if obj then
+				local _, ty, _, th = rectOf(obj)
+				aimY = ty + th / 2
+			end
+			local x, y
+			if sw - (winX + winW) >= CARD_W + gap * 1.5 then
+				x = winX + winW + gap
+				y = math.clamp(aimY - cardH / 2, gap, sh - cardH - gap)
+			elseif winX >= CARD_W + gap * 1.5 then
+				x = winX - gap - CARD_W
+				y = math.clamp(aimY - cardH / 2, gap, sh - cardH - gap)
+			elseif sh - (winY + winH) >= cardH + gap * 1.5 then
+				x = math.clamp(winX + winW / 2 - CARD_W / 2, gap, sw - CARD_W - gap)
+				y = winY + winH + gap
+			else
+				x = math.clamp(winX + winW / 2 - CARD_W / 2, gap, sw - CARD_W - gap)
+				y = math.max(gap, winY - gap - cardH)
+			end
+			tween(cardHolder, TI_SMOOTH, { Position = UDim2.fromOffset(math.floor(x), math.floor(y)) })
 		end
 
 		local function renderDots()
@@ -9176,7 +9194,7 @@ local function _constructWindow(Settings)
 		local finish
 
 		local function show(i, dir)
-			if not active then return end -- ignore stray Back/Next during the finish fade-out
+			if not active then return end
 			index = math.clamp(i, 0, #steps - 1)
 			epoch = epoch + 1
 			local my = epoch
@@ -9186,7 +9204,6 @@ local function _constructWindow(Settings)
 
 			task.spawn(function()
 				local obj, hdl = resolveTarget(step.Target)
-				-- close a previously opened dropdown that this step doesn't reuse
 				if openedDropdown and openedDropdown ~= hdl then
 					pcall(function() openedDropdown:Close() end)
 					openedDropdown = nil
@@ -9196,12 +9213,13 @@ local function _constructWindow(Settings)
 					trackTarget = nil
 					haveGoal = false
 					if hlBox then hlBox.Visible = false end
-					positionCard("center")
+					task.wait(0.14)
+					if my ~= epoch then return end
+					positionCard(nil)
 					return
 				end
 
 				if my ~= epoch then return end
-
 				local te = tabOf(obj)
 				local switching = te and te ~= currentTab
 				if switching then
@@ -9211,40 +9229,23 @@ local function _constructWindow(Settings)
 					if my ~= epoch then return end
 				end
 
-				-- open a dropdown so its options show, and frame the whole thing
 				if step.Open and hdl and hdl.Open then
-					openedDropdown = hdl -- set before opening so finish() always closes it
+					openedDropdown = hdl
 					hdl:Open()
 					task.wait(0.36)
 					if my ~= epoch then return end
 					obj = hdl.Wrapper or obj
 				end
 
+				scrollTo(te and te.Page, obj)
+				task.wait(0.42)
+				if my ~= epoch then return end
+
 				trackTarget = obj
 				seedGoal(obj)
-				if not hlBox.Visible or switching then
-					snapToGoal()
-				end
+				if not hlBox.Visible or switching then snapToGoal() end
 				hlBox.Visible = true
-
-				-- let the info card finish resizing to this step's text before we
-				-- measure its height (updateCard defers the resize ~0.13s); the
-				-- switch/Open paths already waited longer than that
-				if not switching and not (step.Open and hdl and hdl.Open) then
-					task.wait(0.16)
-					if my ~= epoch then return end
-				end
-
-				-- pick which edge the card parks on, then scroll the target clear of it.
-				-- a tall target (open dropdown) always gets the card on top so its
-				-- header stays visible just beneath the card.
-				local _, ry, _, rh = rectOf(obj)
-				local page = te and te.Page
-				local vh = page and page.AbsoluteWindowSize.Y or window.AbsoluteSize.Y
-				local side
-				if rh > vh * 0.5 then side = "top"
-				else side = (ry + rh / 2) < window.AbsoluteSize.Y * 0.5 and "bottom" or "top" end
-				frameTarget(obj, page, side)
+				positionCard(obj)
 			end)
 		end
 
@@ -9259,10 +9260,14 @@ local function _constructWindow(Settings)
 			local o = overlay
 			overlay = nil
 			if o then
-				o.Interactable = false -- no clicks during the fade-out (buttons live for 0.3s otherwise)
-				tween(scrim, TI_MED, { BackgroundTransparency = 1 })
+				o.Interactable = false
 				if cardScale then tween(cardScale, TI_MED, { Scale = 0.9 }) end
-				if hlBox then tween(hlBox, TI_FAST, { Size = UDim2.fromOffset(math.floor(cw + 24), math.floor(ch + 24)) }) end
+				if hlBox then tween(hlBox:FindFirstChildWhichIsA("UIStroke"), TI_MED, { Transparency = 1 }) end
+				for _, d in ipairs(o:GetDescendants()) do
+					if d:IsA("TextLabel") then tween(d, TI_MED, { TextTransparency = 1 })
+					elseif d:IsA("ImageLabel") then tween(d, TI_MED, { ImageTransparency = 1 })
+					elseif d:IsA("Frame") and d ~= hlBox and d.BackgroundTransparency < 1 then tween(d, TI_MED, { BackgroundTransparency = 1 }) end
+				end
 				task.delay(0.3, function() if o then o:Destroy() end end)
 			end
 			runCallback(skipped and TutorialSettings.OnSkip or TutorialSettings.OnFinish, index + 1)
@@ -9275,21 +9280,19 @@ local function _constructWindow(Settings)
 				Size = UDim2.fromScale(1, 1),
 				Visible = false,
 				ZIndex = 940,
-				Parent = window,
+				Parent = rootGui,
 			})
-			-- dim + input blocker (a rounded button so corners match the window)
-			scrim = create("TextButton", {
+			-- invisible input blocker: no dim, just stops the user touching the menu
+			blocker = create("TextButton", {
 				Text = "", AutoButtonColor = false,
-				BackgroundColor3 = Color3.fromRGB(6, 6, 8),
 				BackgroundTransparency = 1,
 				Size = UDim2.fromScale(1, 1),
 				ZIndex = 1,
 				Parent = overlay,
 			})
-			round(scrim, GenStyle.windowCorner)
-			scrim.MouseButton1Click:Connect(function() end) -- swallow every click
+			blocker.MouseButton1Click:Connect(function() end)
 
-			-- a single clean rounded outline that tracks the target
+			-- the single rounded rectangle that tracks the target
 			hlBox = create("Frame", {
 				BackgroundTransparency = 1,
 				Visible = false,
@@ -9300,33 +9303,32 @@ local function _constructWindow(Settings)
 			local boxStroke = create("UIStroke", { Thickness = 2.5, Transparency = 0, Parent = hlBox })
 			paint(boxStroke, "Color", "Accent")
 
-			-- info card
+			-- the explanation card, floated OUTSIDE the window
 			cardHolder = create("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new(0.5, 0, 0.5, 0),
-				Size = UDim2.new(1, -48, 0, 0),
+				AnchorPoint = Vector2.new(0, 0),
+				Position = UDim2.fromOffset(0, 0),
+				Size = UDim2.new(0, CARD_W, 0, 0),
 				AutomaticSize = Enum.AutomaticSize.Y,
 				BackgroundColor3 = Theme.Card,
 				ZIndex = 6,
 				Parent = overlay,
 			})
 			paint(cardHolder, "BackgroundColor3", "Card")
-			create("UISizeConstraint", { MaxSize = Vector2.new(360, math.huge), Parent = cardHolder })
 			cardScale = create("UIScale", { Scale = 0.9, Parent = cardHolder })
 			round(cardHolder, math.max(10, GenStyle.cardRadius + 4))
-			local chStroke = create("UIStroke", { Transparency = 0.82, Thickness = 1, Parent = cardHolder })
-			paint(chStroke, "Color", "Stroke")
-			padAll(cardHolder, 18, 18, 16, 18)
+			local chStroke = create("UIStroke", { Transparency = 0.6, Thickness = 1.5, Parent = cardHolder })
+			paint(chStroke, "Color", "Accent")
+			padAll(cardHolder, 16, 16, 14, 16)
 			create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
 				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 10),
+				Padding = UDim.new(0, 9),
 				Parent = cardHolder,
 			})
 
 			iconImg = create("ImageLabel", {
 				BackgroundTransparency = 1,
-				Size = UDim2.fromOffset(24, 24),
+				Size = UDim2.fromOffset(22, 22),
 				ImageColor3 = Theme.Accent,
 				LayoutOrder = 1,
 				ZIndex = 6,
@@ -9338,7 +9340,7 @@ local function _constructWindow(Settings)
 				AutomaticSize = Enum.AutomaticSize.Y,
 				Size = UDim2.new(1, 0, 0, 0),
 				Font = FONT_BOLD,
-				TextSize = 18,
+				TextSize = 17,
 				TextXAlignment = Enum.TextXAlignment.Left,
 				TextWrapped = true,
 				Text = "",
@@ -9364,7 +9366,6 @@ local function _constructWindow(Settings)
 			})
 			paint(contentLbl, "TextColor3", "TextSub")
 
-			-- progress dots
 			dotsRow = create("Frame", {
 				BackgroundTransparency = 1,
 				Size = UDim2.new(1, 0, 0, 8),
@@ -9393,10 +9394,9 @@ local function _constructWindow(Settings)
 				dots[i] = dot
 			end
 
-			-- footer: Skip left, Back + Next right
 			local footer = create("Frame", {
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, 0, 0, 36),
+				Size = UDim2.new(1, 0, 0, 34),
 				LayoutOrder = 5,
 				ZIndex = 6,
 				Parent = cardHolder,
@@ -9405,7 +9405,7 @@ local function _constructWindow(Settings)
 				BackgroundTransparency = 1,
 				AnchorPoint = Vector2.new(0, 0.5),
 				Position = UDim2.new(0, 0, 0.5, 0),
-				Size = UDim2.fromOffset(80, 32),
+				Size = UDim2.fromOffset(66, 30),
 				Font = FONT_MEDIUM,
 				TextSize = 14,
 				TextXAlignment = Enum.TextXAlignment.Left,
@@ -9420,8 +9420,8 @@ local function _constructWindow(Settings)
 			backBtn = create("TextButton", {
 				BackgroundColor3 = Theme.CardInset,
 				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -108, 0.5, 0),
-				Size = UDim2.fromOffset(76, 34),
+				Position = UDim2.new(1, -96, 0.5, 0),
+				Size = UDim2.fromOffset(66, 32),
 				Font = FONT_MEDIUM,
 				TextSize = 14,
 				Text = "Back",
@@ -9439,7 +9439,7 @@ local function _constructWindow(Settings)
 				BackgroundColor3 = Theme.Accent,
 				AnchorPoint = Vector2.new(1, 0.5),
 				Position = UDim2.new(1, 0, 0.5, 0),
-				Size = UDim2.fromOffset(100, 34),
+				Size = UDim2.fromOffset(90, 32),
 				Text = "",
 				ZIndex = 6,
 				Parent = footer,
@@ -9450,7 +9450,7 @@ local function _constructWindow(Settings)
 				BackgroundTransparency = 1,
 				AnchorPoint = Vector2.new(0.5, 0.5),
 				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.fromOffset(88, 20),
+				Size = UDim2.fromOffset(80, 20),
 				ZIndex = 7,
 				Parent = nextBtn,
 			})
@@ -9501,7 +9501,6 @@ local function _constructWindow(Settings)
 			setScrollLock(true)
 			startTracking()
 			overlay.Visible = true
-			tween(scrim, TI_MED, { BackgroundTransparency = 0.55 }) -- light dim: outline the menu, don't hide it
 			cardScale.Scale = 0.9
 			tween(cardScale, TI_SMOOTH, { Scale = 1 })
 			show((tonumber(startIndex) or 1) - 1, 1)
@@ -9674,6 +9673,9 @@ local function loadPersistedChoice()
 				if type(k) == "string" and #k > 0 then table.insert(aiKeys, k) end
 			end
 		end
+		if type(data.aiProvider) == "string" and (data.aiProvider == "Auto" or AI_PROVIDERS[data.aiProvider]) then
+			aiProvider = data.aiProvider
+		end
 	end
 end
 
@@ -9710,9 +9712,6 @@ local function makeNode(real, node)
 					end
 					return table.unpack(out, 1, rets.n)
 				end
-			end
-			if type(data.aiProvider) == "string" and (data.aiProvider == "Auto" or AI_PROVIDERS[data.aiProvider]) then
-				aiProvider = data.aiProvider
 			end
 			return function(a, ...)
 				local rr = node.cell.real
