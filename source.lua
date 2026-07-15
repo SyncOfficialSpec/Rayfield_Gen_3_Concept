@@ -226,6 +226,20 @@ local AI_ORIGIN_KNOWLEDGE = table.concat({
 	"- You run inside the menu's top bar and can be opened any time. You answer questions and, when the script author wires up actions, you can do things in-game.",
 	"- Be friendly and concise. This background is permanent and does not change when API keys, models, or system prompts change.",
 }, "\n")
+
+-- OpenAI-compatible providers a saved key can be sent to. Auto-detection uses the
+-- key prefix; the settings dropdown can force one (needed for sk- keys that are
+-- NOT OpenAI, e.g. DeepSeek/Together, which share the prefix).
+local AI_PROVIDERS = {
+	OpenAI     = { endpoint = "https://api.openai.com/v1/chat/completions", model = "gpt-4o-mini" },
+	OpenRouter = { endpoint = "https://openrouter.ai/api/v1/chat/completions", model = "openrouter/free" },
+	Groq       = { endpoint = "https://api.groq.com/openai/v1/chat/completions", model = "llama-3.3-70b-versatile" },
+	Google     = { endpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model = "gemini-2.5-flash-lite" },
+	DeepSeek   = { endpoint = "https://api.deepseek.com/v1/chat/completions", model = "deepseek-chat" },
+}
+local AI_PROVIDER_ORDER = { "Auto", "OpenAI", "OpenRouter", "Groq", "Google", "DeepSeek" }
+local aiProvider = "Auto" -- forced provider from settings; "Auto" = detect by key prefix
+
 local function maskKey(k)
 	k = tostring(k)
 	if #k <= 8 then return string.rep("*", #k) end
@@ -2585,20 +2599,26 @@ local function _constructWindow(Settings)
 		local endpoint = ChatSettings.Endpoint or "https://api.openai.com/v1/chat/completions"
 		local freeModel = ChatSettings.FreeModel or "openai-fast"
 
-		-- Route each key to the right provider by its prefix, so people can paste
-		-- a key from a service that actually has a free tier (OpenRouter, Groq,
-		-- Google) instead of only OpenAI, which 429s any key without billing. The
-		-- author can still pin a provider with ChatSettings.Endpoint/Model.
+		-- Route each key to the right provider so people can paste a key from a
+		-- service that actually has a free tier (OpenRouter, Groq, Google) instead
+		-- of only OpenAI, which rejects/limits keys without billing. The settings
+		-- dropdown can force a provider (for sk- keys that aren't OpenAI); the
+		-- author can also pin one with ChatSettings.Endpoint/Model.
 		local function providerFor(key)
 			if ChatSettings.Endpoint then return endpoint, model, "custom" end
-			local k = tostring(key or "")
 			local m = ChatSettings.Model -- author override, nil if unset
+			-- explicit choice from settings wins over prefix detection
+			if aiProvider and aiProvider ~= "Auto" and AI_PROVIDERS[aiProvider] then
+				local p = AI_PROVIDERS[aiProvider]
+				return p.endpoint, m or p.model, aiProvider
+			end
+			local k = tostring(key or "")
 			if k:sub(1, 6) == "sk-or-" then
-				return "https://openrouter.ai/api/v1/chat/completions", m or "openrouter/free", "OpenRouter"
+				return AI_PROVIDERS.OpenRouter.endpoint, m or AI_PROVIDERS.OpenRouter.model, "OpenRouter"
 			elseif k:sub(1, 4) == "gsk_" then
-				return "https://api.groq.com/openai/v1/chat/completions", m or "llama-3.3-70b-versatile", "Groq"
+				return AI_PROVIDERS.Groq.endpoint, m or AI_PROVIDERS.Groq.model, "Groq"
 			elseif k:sub(1, 4) == "AIza" then
-				return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", m or "gemini-2.5-flash-lite", "Google"
+				return AI_PROVIDERS.Google.endpoint, m or AI_PROVIDERS.Google.model, "Google"
 			end
 			return endpoint, model, "OpenAI"
 		end
@@ -2950,7 +2970,8 @@ local function _constructWindow(Settings)
 					end
 					if attempt < 3 then task.wait(2.5) else return nil, provider .. " is rate limited, try again soon", true end
 				elseif code == 401 or code == 403 then
-					return nil, provider .. " rejected this key (HTTP " .. code .. ")", true
+					local extra = (provider == "OpenAI") and ". If it is not an OpenAI key, pick the right provider in the gear" or ""
+					return nil, provider .. " rejected this key (HTTP " .. code .. ")" .. extra, true
 				elseif code == 400 then
 					-- 400 is usually a bad/blank key (Google), sometimes a bad model
 					if low:find("model") and not (low:find("api key") or low:find("api_key")) then
@@ -2969,7 +2990,7 @@ local function _constructWindow(Settings)
 		local function freePost(withModel)
 			local res, rerr = httpPost("https://text.pollinations.ai/openai", {
 				["Content-Type"] = "application/json",
-			}, { model = withModel, messages = buildMessages(), private = true })
+			}, { model = withModel, messages = buildMessages(), private = true, referrer = "rayfield-gen3" })
 			if not res then return nil, rerr or "request failed" end
 			local code = tonumber(res.StatusCode or res.status_code) or 0
 			if code < 200 or code >= 300 then
@@ -2980,16 +3001,19 @@ local function _constructWindow(Settings)
 		end
 
 		local function freeRequest()
-			local altModel = freeModel ~= "openai" and "openai" or "mistral"
-			-- primary model, one backoff retry (queue-full clears quickly), then the alternate
+			-- the fast model clears quickly when it is busy, so retry it a few times
+			-- with growing backoff, then fall back to a couple of alternates
 			local plan = {
 				{ model = freeModel },
-				{ model = freeModel, wait = 2.5 },
-				{ model = altModel },
+				{ model = freeModel, wait = 1.5 },
+				{ model = freeModel, wait = 3 },
+				{ model = "mistral", wait = 1 },
+				{ model = "openai", wait = 1 },
 			}
-			local lastErr = "the free AI service is unreachable"
+			local lastErr = "the free AI is busy"
 			for _, step in ipairs(plan) do
 				if step.wait then task.wait(step.wait) end
+				if not msgs.Parent then return nil, "closed" end
 				local reply, err = freePost(step.model)
 				if reply then return reply end
 				if err then lastErr = err end
@@ -3002,13 +3026,13 @@ local function _constructWindow(Settings)
 				table.insert(lines, (m.role == "user" and "User: " or "Assistant: ") .. m.content)
 			end
 			table.insert(lines, "Assistant:")
-			local raw = fetch("https://text.pollinations.ai/" .. HttpService:UrlEncode(table.concat(lines, "\n")))
+			local raw = fetch("https://text.pollinations.ai/" .. HttpService:UrlEncode(table.concat(lines, "\n")) .. "?referrer=rayfield-gen3")
 			if raw then
 				local reply, err = parseChatBody(raw)
 				if reply then return reply end
 				if err then lastErr = err end
 			end
-			return nil, lastErr
+			return nil, "the free AI is busy right now. Try again in a moment, or add a free Groq key (gsk_...) in the gear for faster, smarter replies."
 		end
 
 		-- blocking yes/no through the dialog. Closing with the X counts as no,
@@ -3226,6 +3250,7 @@ local function _constructWindow(Settings)
 			paint(aiIcon, "ImageColor3", "Accent")
 
 			local built, overlay, scrim, panel, panelScale, isOpen = false, nil, nil, nil, nil, false
+			local aiCloseGen = 0
 			local setOpen
 
 			local function build()
@@ -3299,8 +3324,9 @@ local function _constructWindow(Settings)
 					tween(panelScale, AI_SHRINK, { Scale = 0.9 })
 					tween(panel, AI_SHRINK, { Position = UDim2.new(0.5, 0, 0.545, 0) })
 					tween(aiIcon, TI_FAST, { ImageColor3 = Theme.Accent })
-					local o = overlay
-					task.delay(0.48, function() if not isOpen and o then o.Visible = false end end)
+					aiCloseGen = aiCloseGen + 1
+					local g, o = aiCloseGen, overlay
+					task.delay(0.48, function() if g == aiCloseGen and not isOpen and o then o.Visible = false end end)
 				end
 			end
 
@@ -8265,7 +8291,9 @@ local function _constructWindow(Settings)
 				if revealed then
 					coverBtn.Active = false
 					if animate then
-						local H = math.max(content.AbsoluteSize.Y, 1)
+						-- clamp to the cover height so a pre-layout (0px) measure never
+						-- makes the stage tween backwards to 1px
+						local H = math.max(content.AbsoluteSize.Y, 44)
 						stage.AutomaticSize = Enum.AutomaticSize.None
 						stage.Size = UDim2.new(1, 0, 0, math.max(stage.AbsoluteSize.Y, 44))
 						coverBar.Visible = true
@@ -8275,6 +8303,9 @@ local function _constructWindow(Settings)
 						task.delay(0.38, function()
 							if e == sEpoch and revealed then
 								coverBar.Visible = false
+								-- reset the offset to 0 so the size floor doesn't pin the
+								-- stage taller than the content if it later shrinks
+								stage.Size = UDim2.new(1, 0, 0, 0)
 								stage.AutomaticSize = Enum.AutomaticSize.Y
 							end
 						end)
@@ -8286,11 +8317,14 @@ local function _constructWindow(Settings)
 				else
 					coverBtn.Active = true
 					if animate then
-						local curH = math.max(stage.AbsoluteSize.Y, content.AbsoluteSize.Y, 44)
+						-- start the collapse from the stage's current (possibly mid-tween)
+						-- height, not the full content height, to avoid an upward pop
+						local curH = math.max(stage.AbsoluteSize.Y, 44)
 						stage.AutomaticSize = Enum.AutomaticSize.None
 						stage.Size = UDim2.new(1, 0, 0, curH)
 						coverBar.Visible = true
 						coverBar.Position = UDim2.fromOffset(0, -50)
+						coverBar.BackgroundColor3 = Theme.CardInset -- clear any lingering hover tint
 						pillScale.Scale = 1
 						tween(coverBar, SPOIL_TW, { Position = UDim2.fromOffset(0, 0) })
 						tween(stage, SPOIL_TW, { Size = UDim2.new(1, 0, 0, 44) })
@@ -8309,8 +8343,8 @@ local function _constructWindow(Settings)
 
 			local api = buildTabAPI(inner, false)
 			api.Card = card
-			function api:Reveal() apply(true, true) end
-			function api:Hide() apply(false, true) end
+			function api:Reveal() if not revealed then apply(true, true) end end
+			function api:Hide() if revealed then apply(false, true) end end
 			function api:Toggle() apply(not revealed, true) end
 			function api:IsRevealed() return revealed end
 			function api:SetText(t)
@@ -8571,7 +8605,17 @@ local function _constructWindow(Settings)
 		SettingsTab:CreateSection("AI keys")
 		SettingsTab:CreateParagraph({
 			Title = "Which keys work?",
-			Content = "Paste a key and it routes to the right provider automatically. OpenRouter (sk-or-...), Groq (gsk_...) and Google Gemini (AIza...) all have free tiers that work with no billing. A plain OpenAI key (sk-...) needs a paid plan or it returns 429. No key at all = the free built-in AI.",
+			Content = "For free, smart replies get a Groq key (gsk_...) at console.groq.com - free, no card, fast. OpenRouter (sk-or-...) and Google Gemini (AIza...) are free too. A plain OpenAI key (sk-...) needs a paid plan or it is rejected. Keys auto-route by prefix; if yours is an sk- key that is NOT OpenAI (DeepSeek, Together...), pick its provider below. No key = the free built-in AI.",
+		})
+		SettingsTab:CreateDropdown({
+			Name = "Provider",
+			Icon = "server",
+			Options = AI_PROVIDER_ORDER,
+			CurrentOption = aiProvider,
+			Callback = function(opt)
+				local name = type(opt) == "table" and opt[1] or opt
+				if name then aiProvider = name; persistChoice() end
+			end,
 		})
 		local keysLabel
 		local function refreshKeysLabel()
@@ -9183,6 +9227,14 @@ local function _constructWindow(Settings)
 				end
 				hlBox.Visible = true
 
+				-- let the info card finish resizing to this step's text before we
+				-- measure its height (updateCard defers the resize ~0.13s); the
+				-- switch/Open paths already waited longer than that
+				if not switching and not (step.Open and hdl and hdl.Open) then
+					task.wait(0.16)
+					if my ~= epoch then return end
+				end
+
 				-- pick which edge the card parks on, then scroll the target clear of it.
 				-- a tall target (open dropdown) always gets the card on top so its
 				-- header stays visible just beneath the card.
@@ -9600,7 +9652,7 @@ function persistChoice()
 		mkfolder(BASE_FOLDER)
 		writef(GEN_FILE, HttpService:JSONEncode({
 			generation = GEN.generation, theme = GEN.theme, font = GEN.fontOverride,
-			transparency = GEN.transparency, acrylic = GEN.acrylic, aiKeys = aiKeys,
+			transparency = GEN.transparency, acrylic = GEN.acrylic, aiKeys = aiKeys, aiProvider = aiProvider,
 		}))
 	end)
 end
@@ -9658,6 +9710,9 @@ local function makeNode(real, node)
 					end
 					return table.unpack(out, 1, rets.n)
 				end
+			end
+			if type(data.aiProvider) == "string" and (data.aiProvider == "Auto" or AI_PROVIDERS[data.aiProvider]) then
+				aiProvider = data.aiProvider
 			end
 			return function(a, ...)
 				local rr = node.cell.real
