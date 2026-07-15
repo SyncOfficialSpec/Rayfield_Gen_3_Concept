@@ -3277,25 +3277,30 @@ local function _constructWindow(Settings)
 				built = true
 			end
 
+			-- Sirius settings-panel feel, smoothed: one unified Quint ease, a gentle
+			-- scale-up + drift on open, and a fade that outlasts the shrink on close.
+			local AI_OPEN = TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+			local AI_SHRINK = TweenInfo.new(0.34, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+			local AI_FADE = TweenInfo.new(0.48, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 			function setOpen(state)
 				if state and not built then build() end
 				isOpen = state and true or false
 				if not overlay then return end
 				if isOpen then
 					overlay.Visible = true
-					panel.Position = UDim2.new(0.5, 0, 0.55, 0) -- pop up from slightly lower
-					panelScale.Scale = 0.9
-					tween(scrim, TI_MED, { BackgroundTransparency = 0.5 })
-					tween(panelScale, TI_SMOOTH, { Scale = 1 })
-					tween(panel, TI_SMOOTH, { Position = UDim2.new(0.5, 0, 0.52, 0) })
+					panel.Position = UDim2.new(0.5, 0, 0.545, 0)
+					panelScale.Scale = 0.88
+					tween(scrim, AI_OPEN, { BackgroundTransparency = 0.5 })
+					tween(panelScale, AI_OPEN, { Scale = 1 })
+					tween(panel, AI_OPEN, { Position = UDim2.new(0.5, 0, 0.52, 0) })
 					tween(aiIcon, TI_FAST, { ImageColor3 = Theme.AccentSoft or Theme.Accent })
 				else
-					tween(scrim, TI_MED, { BackgroundTransparency = 1 })
-					tween(panelScale, TI_MED, { Scale = 0.9 })
-					tween(panel, TI_MED, { Position = UDim2.new(0.5, 0, 0.55, 0) })
+					tween(scrim, AI_FADE, { BackgroundTransparency = 1 })
+					tween(panelScale, AI_SHRINK, { Scale = 0.9 })
+					tween(panel, AI_SHRINK, { Position = UDim2.new(0.5, 0, 0.545, 0) })
 					tween(aiIcon, TI_FAST, { ImageColor3 = Theme.Accent })
 					local o = overlay
-					task.delay(0.28, function() if not isOpen and o then o.Visible = false end end)
+					task.delay(0.48, function() if not isOpen and o then o.Visible = false end end)
 				end
 			end
 
@@ -6462,14 +6467,17 @@ local function _constructWindow(Settings)
 				setSearch(not searchOn)
 			end)
 
+			-- option rows sit a shade darker than the card so the light text on
+			-- them reads clearly (and stays legible under the tutorial dim)
+			local OPT_BG = shade(Theme.CardInset, -0.34)
 			local function renderRows()
 				for _, row in ipairs(optionRows) do
 					if not row.isSection then
 						local selected = isSelected(row.option)
-						row.frame.BackgroundColor3 = selected and Theme.CardSelected or Theme.CardInset
+						row.frame.BackgroundColor3 = selected and Theme.CardSelected or OPT_BG
 						row.check.Visible = selected
 						row.label.Position = UDim2.new(0, selected and 44 or 17, 0.5, 0)
-						row.label.TextColor3 = selected and Theme.TextTitle or Theme.TextSub
+						row.label.TextColor3 = selected and Theme.TextTitle or Theme.TextBody
 					end
 				end
 			end
@@ -6567,7 +6575,7 @@ local function _constructWindow(Settings)
 						end
 					end)
 					rowButton.MouseLeave:Connect(function()
-						tween(row, TI_FAST, {BackgroundColor3 = isSelected(option) and Theme.CardSelected or Theme.CardInset})
+						tween(row, TI_FAST, {BackgroundColor3 = isSelected(option) and Theme.CardSelected or OPT_BG})
 					end)
 					rowButton.MouseButton1Click:Connect(function()
 						choose(option)
@@ -8059,6 +8067,7 @@ local function _constructWindow(Settings)
 			SpoilerSettings = SpoilerSettings or {}
 			local name = SpoilerSettings.Name or SpoilerSettings.Title or "Spoiler"
 			local revealed = SpoilerSettings.Revealed == true
+			local SPOIL_TW = TweenInfo.new(0.36, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 
 			local card = create("Frame", {
 				AutomaticSize = Enum.AutomaticSize.Y,
@@ -8113,99 +8122,33 @@ local function _constructWindow(Settings)
 			eyeBtn.MouseEnter:Connect(function() if eyeIcon then tween(eyeIcon, TI_FAST, { ImageColor3 = Theme.TextTitle }) end end)
 			eyeBtn.MouseLeave:Connect(function() if eyeIcon then tween(eyeIcon, TI_FAST, { ImageColor3 = revealed and Theme.Accent or Theme.TextSub }) end end)
 
-			-- the redacted cover bar (shown while hidden). A plain Frame with a
-			-- fixed height, so there is no automatic-size feedback and no nested
-			-- CanvasGroup for the engine to choke on.
-			local coverBar = create("Frame", {
+			-- the stage clips to a height we animate between the cover bar (44px) and
+			-- the full content, so reveal/hide is a smooth unfold instead of a snap.
+			local stage = create("Frame", {
+				BackgroundTransparency = 1,
+				ClipsDescendants = true,
+				AutomaticSize = Enum.AutomaticSize.None,
 				Size = UDim2.new(1, 0, 0, 44),
-				BackgroundColor3 = Theme.CardInset,
 				LayoutOrder = 2,
 				Parent = card,
 			})
-			paint(coverBar, "BackgroundColor3", "CardInset")
-			round(coverBar, math.max(6, GenStyle.cardRadius - 2))
-			create("UIGradient", {
-				Rotation = 90,
-				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(202, 202, 202)),
-				Transparency = NumberSequence.new({
-					NumberSequenceKeypoint.new(0, 0.9),
-					NumberSequenceKeypoint.new(1, 0.97),
-				}),
-				Parent = coverBar,
-			})
-			local coverStroke = create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = coverBar })
-			paint(coverStroke, "Color", "Stroke")
-			-- centered pill affordance
-			local pill = create("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				AutomaticSize = Enum.AutomaticSize.X,
-				Size = UDim2.new(0, 0, 0, 28),
-				BackgroundColor3 = Theme.CardHover,
-				ZIndex = 2,
-				Parent = coverBar,
-			})
-			paint(pill, "BackgroundColor3", "CardHover")
-			roundFull(pill)
-			create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.86, Thickness = 1, Parent = pill })
-			local pillScale = create("UIScale", { Scale = 1, Parent = pill })
-			create("UIListLayout", {
-				FillDirection = Enum.FillDirection.Horizontal,
-				HorizontalAlignment = Enum.HorizontalAlignment.Center,
-				VerticalAlignment = Enum.VerticalAlignment.Center,
-				SortOrder = Enum.SortOrder.LayoutOrder,
-				Padding = UDim.new(0, 7),
-				Parent = pill,
-			})
-			create("UIPadding", { PaddingLeft = UDim.new(0, 13), PaddingRight = UDim.new(0, 15), Parent = pill })
-			local pillIcon = makeIcon(pill, "eye-off", 15, Theme.Accent)
-			if pillIcon then pillIcon.LayoutOrder = 1; pillIcon.ZIndex = 2 end
-			paint(pillIcon, "ImageColor3", "Accent")
-			local pillLabel = create("TextLabel", {
-				BackgroundTransparency = 1,
-				AutomaticSize = Enum.AutomaticSize.X,
-				Size = UDim2.new(0, 0, 0, 18),
-				Font = FONT_MEDIUM,
-				TextSize = 13,
-				Text = SpoilerSettings.RevealText or "Spoiler, tap to reveal",
-				LayoutOrder = 2,
-				ZIndex = 2,
-				Parent = pill,
-			})
-			paint(pillLabel, "TextColor3", "TextBody")
-			local coverBtn = create("TextButton", {
-				BackgroundTransparency = 1,
-				Text = "",
-				Size = UDim2.fromScale(1, 1),
-				ZIndex = 3,
-				Parent = coverBar,
-			})
-			coverBtn.MouseEnter:Connect(function()
-				tween(coverBar, TI_FAST, { BackgroundColor3 = Theme.CardHover })
-				tween(pillScale, TI_FAST, { Scale = 1.04 })
-			end)
-			coverBtn.MouseLeave:Connect(function()
-				tween(coverBar, TI_FAST, { BackgroundColor3 = Theme.CardInset })
-				tween(pillScale, TI_FAST, { Scale = 1 })
-			end)
 
-			-- the real content (text and/or nested elements), shown when revealed
+			-- the real content (text and/or nested elements); always laid out inside
+			-- the stage, revealed as the stage grows
 			local content = create("Frame", {
 				BackgroundTransparency = 1,
 				AutomaticSize = Enum.AutomaticSize.Y,
+				Position = UDim2.fromOffset(0, 0),
 				Size = UDim2.new(1, 0, 0, 0),
-				Visible = false,
-				LayoutOrder = 3,
-				Parent = card,
+				ZIndex = 1,
+				Parent = stage,
 			})
-			local contentScale = create("UIScale", { Scale = 1, Parent = content })
 			create("UIListLayout", {
 				FillDirection = Enum.FillDirection.Vertical,
 				SortOrder = Enum.SortOrder.LayoutOrder,
 				Padding = UDim.new(0, 8),
 				Parent = content,
 			})
-
 			if SpoilerSettings.Text and SpoilerSettings.Text ~= "" then
 				local txt = create("TextLabel", {
 					BackgroundTransparency = 1,
@@ -8222,7 +8165,6 @@ local function _constructWindow(Settings)
 				})
 				paint(txt, "TextColor3", "TextBody")
 			end
-
 			local inner = create("Frame", {
 				BackgroundTransparency = 1,
 				AutomaticSize = Enum.AutomaticSize.Y,
@@ -8237,25 +8179,126 @@ local function _constructWindow(Settings)
 				Parent = inner,
 			})
 
+			-- the redacted cover bar overlays the top of the stage and peels up on reveal
+			local coverBar = create("Frame", {
+				Size = UDim2.new(1, 0, 0, 44),
+				Position = UDim2.fromOffset(0, 0),
+				BackgroundColor3 = Theme.CardInset,
+				ZIndex = 3,
+				Parent = stage,
+			})
+			paint(coverBar, "BackgroundColor3", "CardInset")
+			round(coverBar, math.max(6, GenStyle.cardRadius - 2))
+			create("UIGradient", {
+				Rotation = 90,
+				Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(202, 202, 202)),
+				Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 0.9),
+					NumberSequenceKeypoint.new(1, 0.97),
+				}),
+				Parent = coverBar,
+			})
+			local coverStroke = create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.9, Thickness = 1, Parent = coverBar })
+			paint(coverStroke, "Color", "Stroke")
+			local pill = create("Frame", {
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.fromScale(0.5, 0.5),
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 0, 28),
+				BackgroundColor3 = Theme.CardHover,
+				ZIndex = 3,
+				Parent = coverBar,
+			})
+			paint(pill, "BackgroundColor3", "CardHover")
+			roundFull(pill)
+			create("UIStroke", { Color = Color3.fromRGB(255, 255, 255), Transparency = 0.86, Thickness = 1, Parent = pill })
+			local pillScale = create("UIScale", { Scale = 1, Parent = pill })
+			create("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				HorizontalAlignment = Enum.HorizontalAlignment.Center,
+				VerticalAlignment = Enum.VerticalAlignment.Center,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+				Padding = UDim.new(0, 7),
+				Parent = pill,
+			})
+			create("UIPadding", { PaddingLeft = UDim.new(0, 13), PaddingRight = UDim.new(0, 15), Parent = pill })
+			local pillIcon = makeIcon(pill, "eye-off", 15, Theme.Accent)
+			if pillIcon then pillIcon.LayoutOrder = 1; pillIcon.ZIndex = 3 end
+			paint(pillIcon, "ImageColor3", "Accent")
+			local pillLabel = create("TextLabel", {
+				BackgroundTransparency = 1,
+				AutomaticSize = Enum.AutomaticSize.X,
+				Size = UDim2.new(0, 0, 0, 18),
+				Font = FONT_MEDIUM,
+				TextSize = 13,
+				Text = SpoilerSettings.RevealText or "Spoiler, tap to reveal",
+				LayoutOrder = 2,
+				ZIndex = 3,
+				Parent = pill,
+			})
+			paint(pillLabel, "TextColor3", "TextBody")
+			local coverBtn = create("TextButton", {
+				BackgroundTransparency = 1,
+				Text = "",
+				Size = UDim2.fromScale(1, 1),
+				ZIndex = 4,
+				Parent = coverBar,
+			})
+			coverBtn.MouseEnter:Connect(function()
+				tween(coverBar, TI_FAST, { BackgroundColor3 = Theme.CardHover })
+				tween(pillScale, TI_FAST, { Scale = 1.04 })
+			end)
+			coverBtn.MouseLeave:Connect(function()
+				tween(coverBar, TI_FAST, { BackgroundColor3 = Theme.CardInset })
+				tween(pillScale, TI_FAST, { Scale = 1 })
+			end)
+
+			local sEpoch = 0
 			local function apply(state, animate)
 				revealed = state and true or false
+				sEpoch = sEpoch + 1
+				local e = sEpoch
 				if eyeIcon then
 					applyLucide(eyeIcon, revealed and "eye" or "eye-off")
 					eyeIcon.ImageColor3 = revealed and Theme.Accent or Theme.TextSub
 				end
 				if revealed then
-					coverBar.Visible = false
-					content.Visible = true
+					coverBtn.Active = false
 					if animate then
-						contentScale.Scale = 0.97
-						tween(contentScale, TI_SMOOTH, { Scale = 1 })
+						local H = math.max(content.AbsoluteSize.Y, 1)
+						stage.AutomaticSize = Enum.AutomaticSize.None
+						stage.Size = UDim2.new(1, 0, 0, math.max(stage.AbsoluteSize.Y, 44))
+						coverBar.Visible = true
+						coverBar.Position = UDim2.fromOffset(0, 0)
+						tween(stage, SPOIL_TW, { Size = UDim2.new(1, 0, 0, H) })
+						tween(coverBar, SPOIL_TW, { Position = UDim2.fromOffset(0, -50) })
+						task.delay(0.38, function()
+							if e == sEpoch and revealed then
+								coverBar.Visible = false
+								stage.AutomaticSize = Enum.AutomaticSize.Y
+							end
+						end)
+					else
+						coverBar.Visible = false
+						stage.AutomaticSize = Enum.AutomaticSize.Y
+						stage.Size = UDim2.new(1, 0, 0, 0)
 					end
 				else
-					content.Visible = false
-					coverBar.Visible = true
+					coverBtn.Active = true
 					if animate then
-						pillScale.Scale = 0.88
-						tween(pillScale, TI_SMOOTH, { Scale = 1 })
+						local curH = math.max(stage.AbsoluteSize.Y, content.AbsoluteSize.Y, 44)
+						stage.AutomaticSize = Enum.AutomaticSize.None
+						stage.Size = UDim2.new(1, 0, 0, curH)
+						coverBar.Visible = true
+						coverBar.Position = UDim2.fromOffset(0, -50)
+						pillScale.Scale = 1
+						tween(coverBar, SPOIL_TW, { Position = UDim2.fromOffset(0, 0) })
+						tween(stage, SPOIL_TW, { Size = UDim2.new(1, 0, 0, 44) })
+					else
+						stage.AutomaticSize = Enum.AutomaticSize.None
+						stage.Size = UDim2.new(1, 0, 0, 44)
+						coverBar.Visible = true
+						coverBar.Position = UDim2.fromOffset(0, 0)
 					end
 				end
 			end
@@ -8948,7 +8991,6 @@ local function _constructWindow(Settings)
 		end
 
 		local PAD = 6
-		local CARD_Y = { center = 0.5, top = 0.2, bottom = 0.8 }
 		local handle = {}
 		local active, index, epoch = false, 0, 0
 		local overlay, scrim, hlBox, hlGlow, cardHolder, cardScale, iconImg, titleLbl, contentLbl, dotsRow, backBtn, nextBtn, nextLbl, nextIcon, skipBtn
@@ -9011,19 +9053,45 @@ local function _constructWindow(Settings)
 			end)
 		end
 
-		local function scrollTo(page, obj)
+		local function positionCard(side)
+			local WH = window.AbsoluteSize.Y
+			local cardH = math.max(150, cardHolder.AbsoluteSize.Y)
+			local cy
+			if side == "top" then cy = 14 + cardH / 2
+			elseif side == "bottom" then cy = WH - 14 - cardH / 2
+			else cy = WH / 2 end
+			tween(cardHolder, TI_SMOOTH, { Position = UDim2.new(0.5, 0, 0, cy) })
+		end
+
+		-- Scroll so the target lands in the area the card is NOT covering, then
+		-- park the card against the opposite edge. The card never hides the target;
+		-- a tall target (open dropdown) is top-aligned so its header stays visible.
+		local function frameTarget(obj, page, side)
+			positionCard(side)
 			if not page then return end
 			local vh = page.AbsoluteWindowSize.Y
 			if vh <= 0 then return end
-			local objCanvasY = (obj.AbsolutePosition.Y - page.AbsolutePosition.Y) + page.CanvasPosition.Y
-			local goal = objCanvasY - (vh - obj.AbsoluteSize.Y) / 2
-			local maxS = math.max(0, page.AbsoluteCanvasSize.Y - vh)
-			goal = math.clamp(goal, 0, maxS)
+			local WH = window.AbsoluteSize.Y
+			local pageTop = page.AbsolutePosition.Y - window.AbsolutePosition.Y
+			local cardH = math.max(150, cardHolder.AbsoluteSize.Y)
+			local M = 16
+			local freeTop, freeBot
+			if side == "top" then
+				freeTop, freeBot = 14 + cardH + M, pageTop + vh
+			else
+				freeTop, freeBot = pageTop, (WH - 14 - cardH) - M
+			end
+			freeTop = math.max(freeTop, pageTop)
+			freeBot = math.min(freeBot, pageTop + vh)
+			local freeH = math.max(0, freeBot - freeTop)
+			local _, ty, _, th = rectOf(obj)
+			local desiredWinY
+			if th <= freeH then desiredWinY = freeTop + (freeH - th) / 2
+			elseif side == "top" then desiredWinY = freeTop
+			else desiredWinY = freeBot - th end
+			local goal = page.CanvasPosition.Y + (ty - desiredWinY)
+			goal = math.clamp(goal, 0, math.max(0, page.AbsoluteCanvasSize.Y - vh))
 			tween(page, TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { CanvasPosition = Vector2.new(0, goal) })
-		end
-
-		local function positionCard(mode)
-			tween(cardHolder, TI_SMOOTH, { Position = UDim2.new(0.5, 0, CARD_Y[mode] or 0.5, 0) })
 		end
 
 		local function renderDots()
@@ -9115,12 +9183,16 @@ local function _constructWindow(Settings)
 				end
 				hlBox.Visible = true
 
-				-- put the info card in the opposite half so it never covers the target
+				-- pick which edge the card parks on, then scroll the target clear of it.
+				-- a tall target (open dropdown) always gets the card on top so its
+				-- header stays visible just beneath the card.
 				local _, ry, _, rh = rectOf(obj)
-				local centerY = ry + rh / 2
-				positionCard(centerY < window.AbsoluteSize.Y * 0.5 and "bottom" or "top")
-
-				scrollTo(te and te.Page, obj)
+				local page = te and te.Page
+				local vh = page and page.AbsoluteWindowSize.Y or window.AbsoluteSize.Y
+				local side
+				if rh > vh * 0.5 then side = "top"
+				else side = (ry + rh / 2) < window.AbsoluteSize.Y * 0.5 and "bottom" or "top" end
+				frameTarget(obj, page, side)
 			end)
 		end
 
@@ -9165,7 +9237,7 @@ local function _constructWindow(Settings)
 			round(scrim, GenStyle.windowCorner)
 			scrim.MouseButton1Click:Connect(function() end) -- swallow every click
 
-			-- the rounded spotlight box that tracks the target
+			-- a single clean rounded outline that tracks the target
 			hlBox = create("Frame", {
 				BackgroundTransparency = 1,
 				Visible = false,
@@ -9175,17 +9247,6 @@ local function _constructWindow(Settings)
 			round(hlBox, 10)
 			local boxStroke = create("UIStroke", { Thickness = 2.5, Transparency = 0, Parent = hlBox })
 			paint(boxStroke, "Color", "Accent")
-			hlGlow = create("Frame", {
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.fromScale(0.5, 0.5),
-				Size = UDim2.new(1, 14, 1, 14),
-				BackgroundTransparency = 1,
-				ZIndex = 2,
-				Parent = hlBox,
-			})
-			round(hlGlow, 14)
-			local glowStroke = create("UIStroke", { Thickness = 5, Transparency = 0.72, Parent = hlGlow })
-			paint(glowStroke, "Color", "Accent")
 
 			-- info card
 			cardHolder = create("Frame", {
@@ -9388,7 +9449,7 @@ local function _constructWindow(Settings)
 			setScrollLock(true)
 			startTracking()
 			overlay.Visible = true
-			tween(scrim, TI_MED, { BackgroundTransparency = 0.42 })
+			tween(scrim, TI_MED, { BackgroundTransparency = 0.55 }) -- light dim: outline the menu, don't hide it
 			cardScale.Scale = 0.9
 			tween(cardScale, TI_SMOOTH, { Scale = 1 })
 			show((tonumber(startIndex) or 1) - 1, 1)
